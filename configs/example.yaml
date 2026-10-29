@@ -1,0 +1,15 @@
+# Schema is illustrative and is not loaded by the current executable.
+project:
+  name: ground-uav-tracker
+
+input:
+  source: TBD
+
+detection:
+  implementation: TBD
+
+tracking:
+  implementation: TBD
+
+tensorrt:
+  enabled: false

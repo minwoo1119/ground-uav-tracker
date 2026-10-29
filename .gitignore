@@ -4,3 +4,22 @@
 /.vs/
 /.vscode/
 CMakeUserPresets.json
+
+# Local configuration and generated runtime artifacts
+/configs/local*.yaml
+/models/
+/artifacts/
+/outputs/
+/evaluation/results/
+*.engine
+*.onnx
+*.pt
+*.pth
+
+# Datasets stay local; only their policy document is versioned.
+/data/*
+!/data/README.md
+*.mp4
+*.avi
+*.mov
+*.mkv

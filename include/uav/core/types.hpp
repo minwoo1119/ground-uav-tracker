@@ -1,19 +1,24 @@
 #pragma once
 
 #include <chrono>
-#include <cstddef>
 #include <cstdint>
-#include <span>
 #include <string>
 #include <vector>
 
-namespace gut {
+namespace uav {
 
 using FrameId = std::uint64_t;
 using TrackId = std::uint64_t;
 using Timestamp = std::chrono::microseconds;
 
-enum class PixelFormat { gray8, rgb8, bgr8 };
+struct ImageSize {
+  std::uint32_t width{};
+  std::uint32_t height{};
+
+  [[nodiscard]] constexpr bool is_valid() const noexcept {
+    return width > 0U && height > 0U;
+  }
+};
 
 struct BoundingBox {
   float x{};
@@ -32,32 +37,34 @@ struct BoundingBox {
 [[nodiscard]] float intersection_over_union(const BoundingBox& lhs,
                                             const BoundingBox& rhs) noexcept;
 
-struct FrameView {
+// Pixel storage, ownership, and CPU/GPU memory type remain intentionally TBD.
+struct Frame {
   FrameId id{};
   Timestamp captured_at{};
-  std::uint32_t width{};
-  std::uint32_t height{};
-  std::uint32_t stride_bytes{};
-  PixelFormat pixel_format{PixelFormat::bgr8};
-  std::span<const std::byte> pixels{};
+  ImageSize image_size{};
 
-  [[nodiscard]] bool is_valid() const noexcept;
+  [[nodiscard]] constexpr bool is_valid() const noexcept {
+    return image_size.is_valid();
+  }
 };
 
 struct Detection {
-  BoundingBox bounds{};
-  float confidence{};
   std::int32_t class_id{};
+  float confidence{};
+  BoundingBox bounds{};
   std::string class_name{};
 };
 
-enum class TrackState { tentative, confirmed, lost };
+enum class TrackState {
+  tentative,
+  confirmed,
+  lost,
+  removed,
+};
 
 struct Track {
   TrackId id{};
   BoundingBox bounds{};
-  float confidence{};
-  std::int32_t class_id{};
   TrackState state{TrackState::tentative};
   std::uint32_t age_frames{};
   std::uint32_t missed_frames{};
@@ -69,4 +76,4 @@ struct FrameResult {
   std::vector<Track> tracks{};
 };
 
-}  // namespace gut
+}  // namespace uav

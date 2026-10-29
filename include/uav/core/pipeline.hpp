@@ -1,10 +1,14 @@
 #pragma once
 
-#include "gut/core/interfaces.hpp"
+#include "uav/detection/detector.hpp"
+#include "uav/telemetry/metrics_sink.hpp"
+#include "uav/tracking/tracker.hpp"
+#include "uav/video/frame_source.hpp"
 
 #include <cstddef>
+#include <optional>
 
-namespace gut {
+namespace uav {
 
 struct RunOptions {
   // Zero means run until the source is exhausted.
@@ -22,14 +26,15 @@ class TrackingPipeline {
   TrackingPipeline(IFrameSource& source,
                    IDetector& detector,
                    ITracker& tracker,
-                   IResultSink& sink) noexcept;
+                   IMetricsSink& metrics_sink) noexcept;
   [[nodiscard]] RunSummary run(const RunOptions& options = {});
 
  private:
   IFrameSource& source_;
   IDetector& detector_;
   ITracker& tracker_;
-  IResultSink& sink_;
+  IMetricsSink& metrics_sink_;
+  std::optional<Timestamp> last_timestamp_{};
 };
 
-}  // namespace gut
+}  // namespace uav
