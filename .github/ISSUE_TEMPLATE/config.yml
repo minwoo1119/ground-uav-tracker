@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 개발 워크플로 안내
+    url: https://github.com/minwoo1119/ground-uav-tracker/blob/main/docs/DEVELOPMENT_WORKFLOW.md
+    about: Issue 작성부터 Draft PR, 리뷰 및 Merge 조건까지 확인합니다.

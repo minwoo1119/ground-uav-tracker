@@ -1,0 +1,81 @@
+name: 실험
+description: 모델·알고리즘·설정 후보를 비교하기 위한 재현 가능한 실험을 제안합니다.
+title: "[Experiment] "
+labels:
+  - experiment
+body:
+  - type: markdown
+    attributes:
+      value: |
+        실험 착수 전 데이터 사용 권한, 비교 조건과 판단 기준을 합의합니다.
+        검증되지 않은 성능을 사실처럼 기록하지 말고 실행 전 항목은 TBD로 유지해 주세요.
+
+  - type: textarea
+    id: purpose-hypothesis
+    attributes:
+      label: 실험 목적과 가설
+      description: 확인할 질문과 반증 가능한 가설을 구분해 작성해 주세요.
+      placeholder: |
+        목적:
+        가설:
+    validations:
+      required: true
+
+  - type: textarea
+    id: baseline
+    attributes:
+      label: Baseline
+      description: 비교 기준의 코드 리비전, 설정, 모델 및 측정값 출처를 작성해 주세요.
+      placeholder: 기준이 아직 없다면 그 이유와 먼저 구축할 기준을 적어 주세요.
+    validations:
+      required: true
+
+  - type: textarea
+    id: variables
+    attributes:
+      label: 변경 변수
+      description: 한 번에 변경할 독립 변수와 고정할 통제 변수를 명시해 주세요.
+      placeholder: |
+        변경 변수:
+        통제 변수:
+    validations:
+      required: true
+
+  - type: textarea
+    id: dataset-conditions
+    attributes:
+      label: 데이터셋 및 평가 조건
+      description: 데이터 출처·버전·분할·라이선스, 하드웨어 및 실행 조건을 작성해 주세요.
+      placeholder: 실제로 확인하지 않은 데이터 구조나 라이선스는 TBD로 표시해 주세요.
+    validations:
+      required: true
+
+  - type: textarea
+    id: metrics
+    attributes:
+      label: 정량 평가 지표
+      description: 계산 방법과 단위를 포함해 수집할 지표를 작성해 주세요.
+      placeholder: 예) 소형 객체 recall, 새 오탐 수, tracking success, FPS, latency
+    validations:
+      required: true
+
+  - type: textarea
+    id: decision-rule
+    attributes:
+      label: 결과 판단 기준
+      description: 어떤 결과가 가설을 지지·기각하며 다음 결정을 어떻게 바꾸는지 사전에 정의해 주세요.
+      placeholder: 수치 기준이 승인되지 않았다면 TBD와 승인 필요 사항을 명시해 주세요.
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: approvals
+    attributes:
+      label: 착수 전 확인
+      options:
+        - label: 데이터 및 모델의 라이선스와 재배포 조건을 확인했거나 미확인 상태를 명시했습니다.
+          required: true
+        - label: 다운로드·학습·외부 패키지 설치 등 사용자 승인이 필요한 작업을 구분했습니다.
+          required: true
+        - label: 원본 데이터, 가중치, 엔진 및 실험 출력이 Git에서 제외되는지 확인했습니다.
+          required: true

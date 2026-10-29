@@ -1,0 +1,98 @@
+name: 기능 개발
+description: 새로운 기능 또는 기존 기능 개선을 제안합니다.
+title: "[Feature] "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        구현 전에 문제, 범위, 완료 기준과 사용자가 이해해야 할 개념을 합의합니다.
+        모델·데이터·Jetson 스택 등 `AGENTS.md`에서 승인이 필요한 항목은 확정하지 말고 선택지로 기록해 주세요.
+
+  - type: textarea
+    id: problem-purpose
+    attributes:
+      label: 문제 및 개발 목적
+      description: 현재 어떤 문제가 있으며 왜 이 기능이 필요한지 설명해 주세요.
+      placeholder: 사용자 관점의 문제와 기대 효과를 작성해 주세요.
+    validations:
+      required: true
+
+  - type: textarea
+    id: requirements
+    attributes:
+      label: 기능 요구사항
+      description: 입력, 처리, 출력 및 오류 동작을 관찰 가능한 형태로 작성해 주세요.
+      placeholder: |
+        - 입력:
+        - 처리:
+        - 출력:
+        - 오류 처리:
+    validations:
+      required: true
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: 구현 범위
+      description: 포함할 작업과 이번 Issue에서 제외할 작업을 구분해 주세요.
+      placeholder: |
+        포함:
+        -
+
+        제외:
+        -
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance-criteria
+    attributes:
+      label: 완료 기준
+      description: 테스트나 검토로 확인할 수 있는 조건을 체크리스트로 작성해 주세요.
+      placeholder: |
+        - [ ] 정상 경로가 검증된다.
+        - [ ] 오류 경로가 구체적인 메시지를 반환한다.
+        - [ ] 관련 문서가 갱신된다.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: modules
+    attributes:
+      label: 관련 모듈
+      description: 영향을 받는 모듈을 모두 선택해 주세요.
+      multiple: true
+      options:
+        - core
+        - video
+        - detection
+        - tracking
+        - telemetry
+        - apps / CLI
+        - configs
+        - tests
+        - docs
+        - 기타
+    validations:
+      required: true
+
+  - type: textarea
+    id: concepts
+    attributes:
+      label: 사용자가 이해해야 할 기술적 개념
+      description: 구현 리뷰 전에 알아야 할 용어, 데이터 흐름, 제약 및 트레이드오프를 작성해 주세요.
+      placeholder: 개념별로 정의, 이 기능과의 관계, 선택에 미치는 영향을 설명해 주세요.
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: readiness
+    attributes:
+      label: 구현 전 확인
+      options:
+        - label: 기존 Issue 및 PR과 중복되지 않는지 확인했습니다.
+          required: true
+        - label: 사용자 승인이 필요한 결정은 구현 범위와 분리해 표시했습니다.
+          required: true
