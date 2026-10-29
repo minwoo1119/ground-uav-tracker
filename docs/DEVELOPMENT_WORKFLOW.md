@@ -1,6 +1,6 @@
 # GitHub 기반 개발 워크플로
 
-이 문서는 프로젝트 소유자가 설계 의도, 코드 흐름, 기술 결정과 검증 결과를 이해한 뒤 변경을 병합할 수 있도록 Issue → 구현 계획 → 기능 브랜치 → Draft PR → 리뷰 → Merge 절차를 정의합니다. `AGENTS.md`가 최상위 규칙이며 이 문서와 충돌하면 `AGENTS.md`를 우선합니다.
+이 문서는 프로젝트 소유자가 설계 의도, 코드 흐름, 기술 결정과 검증 결과를 이해한 뒤 변경을 병합할 수 있도록 Issue → 구현 계획 → 기능 브랜치 → Draft PR → 리뷰 → Merge 절차를 정의합니다. `AGENTS.md`가 최상위 규칙이며 이 문서와 충돌하면 `AGENTS.md`를 우선합니다. Agent가 실제 명령을 수행하는 순서는 `docs/AGENT_WORKFLOW.md`를 따릅니다.
 
 ## 1. 전체 흐름
 
@@ -78,20 +78,20 @@ Agent는 코드 작성 전에 Issue 댓글 또는 Issue 본문 갱신안으로 �
 
 | 작업 유형 | 브랜치 예시 |
 |---|---|
-| Feature | `feat/123-video-source-interface` |
-| Experiment | `experiment/124-input-size-comparison` |
-| Bug | `fix/125-timestamp-order-error` |
-| 문서 | `docs/126-workflow-guide` |
+| Feature | `issue/123-video-source-interface` |
+| Experiment | `issue/124-input-size-comparison` |
+| Bug | `issue/125-timestamp-order-error` |
+| 문서 | `issue/126-workflow-guide` |
 
 규칙:
 
-- Issue 번호와 짧은 kebab-case 설명을 사용합니다.
+- `issue/<번호>-<간단한-작업명>` 형식으로 Issue 번호와 짧은 kebab-case 설명을 사용합니다.
 - 관련 없는 변경을 같은 브랜치에 섞지 않습니다.
 - 생성 데이터, 모델, 엔진, 비밀 설정은 커밋하지 않습니다.
 - 파괴적인 reset, force push, 기본 브랜치 직접 변경은 사용자 승인 없이 수행하지 않습니다.
 - 커밋은 검토 가능한 논리 단위로 만들고 프로젝트에서 합의한 형식을 사용합니다.
 
-Agent는 브랜치 생성, 커밋, push 또는 PR 생성 권한이 명시적으로 주어진 범위에서만 Git 상태를 변경합니다.
+Issue 기반 개발 요청에서는 `AGENTS.md`와 `docs/AGENT_WORKFLOW.md`에 따라 전용 브랜치 생성, 한글 커밋, 작업 브랜치 push와 Draft PR 생성을 수행합니다. 기본 브랜치 직접 push, Ready 전환, Merge와 원격 보호 설정 변경은 별도 승인이 필요합니다.
 
 ## 6. 구현과 로컬 검증
 

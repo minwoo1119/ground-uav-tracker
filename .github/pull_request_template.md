@@ -1,6 +1,6 @@
 ## 1. 관련 Issue
 
-<!-- 반드시 합의된 Issue를 연결합니다. 예: Closes #123 -->
+<!-- 반드시 합의된 Issue를 연결합니다. 예: Closes #<Issue 번호> -->
 
 - Closes #
 - Issue에서 승인된 구현 계획:
