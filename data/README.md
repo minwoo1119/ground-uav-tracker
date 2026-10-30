@@ -4,7 +4,7 @@
 
 다음은 검토 후보 링크이며, 다운로드하거나 구조를 검증하지 않았습니다.
 
-- [DroneDetectionThesis](https://github.com/DroneDetectionThesis/Drone-detection-dataset)
+- [DroneDetectionThesis](https://github.com/DroneDetectionThesis/Drone-detection-dataset) (상세 검토 결과: [DATASET_REVIEW.md](../docs/datasets/DATASET_REVIEW.md) 참고)
 - [Anti-UAV](https://github.com/ZhaoJ9014/Anti-UAV)
 - [Drone-vs-Bird](https://github.com/wosdetc/challenge)
 
