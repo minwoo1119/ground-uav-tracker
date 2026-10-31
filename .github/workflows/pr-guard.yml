@@ -1,0 +1,86 @@
+name: PR Guard
+
+on:
+  pull_request:
+    types:
+      - opened
+      - edited
+      - synchronize
+      - reopened
+      - ready_for_review
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+
+concurrency:
+  group: pr-guard-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  validate-pr-metadata:
+    name: Validate PR metadata
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Check linked Issue, branch name, and required sections
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_REF: ${{ github.head_ref }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -uo pipefail
+
+          failures=()
+
+          if [[ ! "$HEAD_REF" =~ ^issue/[1-9][0-9]*-[a-z0-9]+(-[a-z0-9]+)*$ ]]; then
+            failures+=("Branch '$HEAD_REF' must match issue/<number>-<kebab-case-name>.")
+          fi
+
+          closing_re='(close[sd]?|fix(e[sd])?|resolve[sd]?)[[:space:]]+#[1-9][0-9]*'
+          closing_matches="$(printf '%s\n' "$PR_BODY" | grep -Eio "$closing_re" || true)"
+          issue_numbers="$(printf '%s\n' "$closing_matches" | grep -Eo '#[1-9][0-9]*' | tr -d '#' | sort -u || true)"
+
+          if [[ -z "$issue_numbers" ]]; then
+            failures+=("PR body must link an Issue with 'Closes #<number>', 'Fixes #<number>', or 'Resolves #<number>'.")
+          else
+            while IFS= read -r issue_number; do
+              [[ -z "$issue_number" ]] && continue
+              issue_type="$(gh api "repos/$REPOSITORY/issues/$issue_number" --jq 'if has("pull_request") then "pull_request" else "issue" end' 2>/dev/null || true)"
+              if [[ "$issue_type" != "issue" ]]; then
+                failures+=("#$issue_number does not exist as an Issue in $REPOSITORY.")
+              fi
+            done <<< "$issue_numbers"
+          fi
+
+          required_sections=(
+            "## 1. 관련 Issue"
+            "## 2. 변경 목적 및 변경 전후 비교"
+            "## 3. 생성·수정된 파일과 주요 역할"
+            "## 4. 핵심 코드 호출 흐름 및 데이터 전달"
+            "## 5. 설계 결정 이유와 고려한 대안"
+            "## 6. 실제 수행한 테스트와 검증 결과"
+            "## 7. 미해결 문제 및 알려진 제약"
+            "## 8. 사용자가 이해해야 할 기술 개념"
+            "## 9. 이해 확인 질문과 해설"
+            "## 10. Merge 전 체크리스트"
+          )
+
+          for section in "${required_sections[@]}"; do
+            if ! grep -Fq -- "$section" <<< "$PR_BODY"; then
+              failures+=("Missing required PR section: $section")
+            fi
+          done
+
+          if (( ${#failures[@]} > 0 )); then
+            printf 'PR Guard found %d problem(s):\n' "${#failures[@]}"
+            printf '  - %s\n' "${failures[@]}"
+            exit 1
+          fi
+
+          echo "PR metadata satisfies the repository's mechanical checks."
+          echo "Technical accuracy and user understanding still require human review."

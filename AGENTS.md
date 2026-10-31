@@ -1,5 +1,23 @@
 # Agent Instructions — Ground-Based Small UAV Detection & Tracking
 
+## 0. 필수 GitHub 개발 워크플로
+
+모든 신규 개발 작업과 새로운 에이전트 세션은 코드나 문서를 변경하기 전에 이 파일과 `docs/AGENT_WORKFLOW.md`를 전체 읽고 동일한 절차를 적용한다.
+
+1. 작업 시작 전 Git 상태, 현재 브랜치, 원격 기본 브랜치, GitHub CLI 인증 상태를 확인하고 기존 Issue와 PR에서 중복 작업을 검색한다.
+2. 적합한 Issue가 없으면 Background, Objective, Scope, Implementation Plan, Acceptance Criteria, Test Plan, Open Questions를 포함한 Issue를 먼저 생성한다.
+3. 중요한 설계 결정이나 이 문서의 “사용자 승인 필요” 항목이 있으면 Issue에 대안과 영향을 기록하고 구현 전에 사용자에게 질문한다.
+4. 신규 작업은 `issue/<번호>-<간단한-작업명>` 형식의 전용 브랜치에서 수행한다. 가능하면 `gh issue develop`로 Issue와 브랜치를 연결한다.
+5. 하나의 Issue는 원칙적으로 하나의 작업 브랜치와 하나의 PR에 연결한다. 범위가 커지면 별도 Issue로 분리한다.
+6. 기본 브랜치에서 직접 개발하거나 Push하지 않는다. 인증 부재, 미커밋 변경, 브랜치 충돌이 있으면 우회하지 말고 사용자에게 보고한다.
+7. 구현 후 관련 테스트의 실제 결과와 미검증 항목을 확인하고, 변경된 파일만 선택적으로 Stage하여 작업 내용을 반영한 한글 커밋을 생성한다.
+8. 작업 브랜치를 Push한 뒤 `gh pr create --draft`로 Draft PR을 생성하고 Issue를 `Closes #<번호>`로 연결한다.
+9. PR 본문에는 목적, 파일별 역할, 입력→처리→출력→모듈 연결 흐름, 설계 결정과 대안, 실제 테스트 결과, 제약, 핵심 코드, 이해 확인 질문과 해설을 기록한다.
+10. 사용자의 명시적 요청 없이 PR을 Ready for Review로 바꾸거나 Merge하지 않는다. 최종 검토와 Merge는 사용자가 수행한다.
+11. 사용자가 수정한 파일과 커밋되지 않은 변경을 임의로 덮어쓰거나 삭제하지 않는다.
+
+Issue 기반 개발 요청은 위 절차에 필요한 Issue 생성, 전용 브랜치 생성, 한글 커밋, 작업 브랜치 Push와 Draft PR 생성을 승인한 것으로 본다. 원격 설정 변경, 기본 브랜치 직접 Push, Ready 전환과 Merge는 포함하지 않는다.
+
 ## 1. 역할과 현재 작업 범위
 
 당신은 C++/컴퓨터 비전/Jetson 임베디드 개발을 지원하는 코딩 에이전트다.
@@ -107,7 +125,7 @@ ground-uav-tracker/
 3. `docs/decisions-pending.md`: 사용자 결정이 필요한 선택지와 그에 따른 영향. `TBD` 상태 유지.
 4. `docs/experiments.md`: 향후 비교 실험(검출 정확도, 소형 객체 Recall, 새 오탐, Tracking Success, FPS/Latency)을 위한 빈 실험 기록 양식. 숫자를 채우지 않는다.
 5. 완료 보고에 **생성/변경 파일, 빌드·테스트 명령과 결과, 미검증 사항, 다음 사용자 결정 사항**을 구분하여 적는다.
-6. 작업 단계 종료 시 변경에 적합한 **한글 Git 커밋 메시지**를 제안한다. 별도 지시가 없으면 commit/push는 하지 않는다.
+6. 작업 단계 종료 시 변경에 적합한 **한글 Git 커밋 메시지**를 사용한다. Issue 기반 개발 작업은 0절에 따라 commit/push/Draft PR까지 수행하고, 단순 조사·설명처럼 Issue 기반 개발이 아닌 요청은 별도 지시가 없으면 commit/push하지 않는다.
 
 ## 4. 에이전트가 결정해도 되는 것 / 안 되는 것
 
