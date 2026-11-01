@@ -363,15 +363,18 @@ class McosLabelParser:
             if et <= 0 or et > 20 or po + esz > end:
                 break
             if et == 9 and esz >= 32 and (esz % 32 == 0):  # miDOUBLE array
+                # MATLAB stores an N x 4 matrix in column-major order:
+                # [x1..xN, y1..yN, w1..wN, h1..hN]. Reading it row-major
+                # silently corrupts every frame with two or more objects.
                 num_boxes = esz // 32
+                vals = struct.unpack_from(f"{endian}{4 * num_boxes}d", buf, po)
                 for i in range(num_boxes):
-                    vals = struct.unpack_from(f"{endian}4d", buf, po + i * 32)
                     bboxes.append(
                         BoundingBox(
-                            x=round(vals[0], 2),
-                            y=round(vals[1], 2),
-                            width=round(vals[2], 2),
-                            height=round(vals[3], 2),
+                            x=round(vals[i], 2),
+                            y=round(vals[num_boxes + i], 2),
+                            width=round(vals[2 * num_boxes + i], 2),
+                            height=round(vals[3 * num_boxes + i], 2),
                         )
                     )
             elif et == 14:  # Nested miMATRIX

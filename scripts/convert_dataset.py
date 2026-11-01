@@ -34,6 +34,16 @@ from mcos_parser import (
     SequenceAnnotation,
 )
 from metadata_parser import MetadataCatalog, SequenceMetadata
+from video_probe import probe_mp4
+
+# Fallback geometry per sensor, used only when the matching .mp4 is not
+# available for probing. Observed from the MP4 headers of V_DRONE_001
+# (640x512, 30 fps) and IR_BIRD_001 (320x256, 30 fps); other videos are
+# unverified until probed, which the Master JSON records in "video_info_source".
+SENSOR_DEFAULTS: Dict[str, Dict[str, float]] = {
+    "V": {"width": 640, "height": 512, "fps": 30.0},
+    "IR": {"width": 320, "height": 256, "fps": 30.0},
+}
 
 
 def calculate_iou(b1: Tuple[float, float, float, float], b2: Tuple[float, float, float, float]) -> float:
@@ -60,21 +70,49 @@ class MasterDatasetBuilder:
         self,
         labels_dir: Path,
         metadata_file: Optional[Path] = None,
-        default_fps: float = 30.0,
-        default_width: int = 1920,
-        default_height: int = 1080,
+        videos_dir: Optional[Path] = None,
     ) -> None:
         self.labels_dir = labels_dir
         self.metadata_file = metadata_file
-        self.default_fps = default_fps
-        self.default_width = default_width
-        self.default_height = default_height
+        self.videos_dir = videos_dir
         self.parser = McosLabelParser()
         self.catalog = (
             MetadataCatalog.from_xlsx(metadata_file)
             if metadata_file and metadata_file.is_file()
             else MetadataCatalog()
         )
+        self.warnings: List[str] = []
+
+    def _video_info(self, seq_name: str, sensor: str, label_frames: int) -> Dict[str, Any]:
+        """Probe the matching .mp4 when available, else fall back to sensor defaults."""
+        if self.videos_dir is not None:
+            candidates = list(self.videos_dir.rglob(f"{seq_name}.mp4"))
+            if candidates:
+                info = probe_mp4(candidates[0])
+                if info.frame_count != label_frames:
+                    self.warnings.append(
+                        f"{seq_name}: video has {info.frame_count} frames but labels have {label_frames}"
+                    )
+                return {
+                    "fps": info.fps,
+                    "image_width": info.width,
+                    "image_height": info.height,
+                    "video_frame_count": info.frame_count,
+                    "video_info_source": "mp4_header",
+                }
+        if sensor not in SENSOR_DEFAULTS:
+            raise ValueError(
+                f"{seq_name}: unknown sensor '{sensor}' and no video to probe; "
+                "pass --videos-dir so resolution can be read from the MP4"
+            )
+        d = SENSOR_DEFAULTS[sensor]
+        return {
+            "fps": d["fps"],
+            "image_width": int(d["width"]),
+            "image_height": int(d["height"]),
+            "video_frame_count": None,
+            "video_info_source": "sensor_default_unverified",
+        }
 
     def build(self) -> Dict[str, Any]:
         mat_files = sorted(self.labels_dir.glob("*_LABELS.mat"))
@@ -94,9 +132,10 @@ class MasterDatasetBuilder:
             seq_annotation = self.parser.parse_file(mat_path)
             seq_name = seq_annotation.sequence_name
             meta = self.catalog.get(seq_name)
+            video = self._video_info(seq_name, meta.sensor, seq_annotation.total_frames)
 
             # Assign simple track IDs across frames
-            frames_with_tracks = self._assign_track_ids(seq_annotation)
+            frames_with_tracks = self._assign_track_ids(seq_annotation, video["fps"])
 
             seq_box_counts = {cls_name: 0 for cls_name in CLASS_TO_ID}
             for frame in frames_with_tracks:
@@ -116,9 +155,7 @@ class MasterDatasetBuilder:
                 "is_multi_drone": meta.is_multi_drone,
                 "label_file": str(mat_path.name),
                 "total_frames": seq_annotation.total_frames,
-                "fps": self.default_fps,
-                "image_width": self.default_width,
-                "image_height": self.default_height,
+                **video,
                 "class_box_counts": seq_box_counts,
                 "frames": frames_with_tracks,
             }
@@ -132,14 +169,21 @@ class MasterDatasetBuilder:
                 "total_frames": total_frames,
                 "class_box_counts": total_boxes,
             },
+            "warnings": list(self.warnings),
             "sequences": sequences_data,
         }
         return master_doc
 
     def _assign_track_ids(
-        self, seq: SequenceAnnotation
+        self, seq: SequenceAnnotation, fps: Optional[float]
     ) -> List[Dict[str, Any]]:
-        """Assign track IDs to bboxes (using simple greedy IoU association)."""
+        """Assign track IDs to bboxes (using simple greedy IoU association).
+
+        The source labels carry no identities, so these IDs are derived:
+        per class, each previous track greedily takes the current box with the
+        highest IoU (> 0.05). A frame without boxes of a class ends all its
+        tracks, so a one-frame label gap starts new IDs.
+        """
         active_tracks: Dict[str, Dict[int, Tuple[float, float, float, float]]] = {
             cls: {} for cls in CLASS_TO_ID
         }
@@ -148,11 +192,7 @@ class MasterDatasetBuilder:
 
         for frame in seq.frames:
             frame_anns: List[Dict[str, Any]] = []
-            sec = (
-                round(frame.frame_index / self.default_fps, 4)
-                if self.default_fps > 0
-                else None
-            )
+            sec = round(frame.frame_index / fps, 4) if fps else None
 
             for cls_name, boxes in frame.boxes_by_class.items():
                 if not boxes:
@@ -189,7 +229,7 @@ class MasterDatasetBuilder:
                             iou = calculate_iou(prev_box, cur_box)
                             if iou > best_iou:
                                 best_iou = iou
-                                best_idx = i = i
+                                best_idx = i
                         if best_iou > 0.05 and best_idx >= 0:
                             matched_box = unmatched_boxes.pop(best_idx)
                             new_active[tid] = matched_box
@@ -246,8 +286,12 @@ class YoloExporter:
         labels_base.mkdir(parents=True, exist_ok=True)
 
         for seq_name, seq_info in master_data["sequences"].items():
-            w = image_width or seq_info.get("image_width", 1920)
-            h = image_height or seq_info.get("image_height", 1080)
+            w = image_width or seq_info.get("image_width")
+            h = image_height or seq_info.get("image_height")
+            if not w or not h:
+                raise ValueError(
+                    f"{seq_name}: image size unknown; rebuild the Master JSON or pass --image-width/--image-height"
+                )
 
             # Determine destination folder (by split if provided, else sequence)
             split_name = ""
@@ -333,14 +377,15 @@ class MotExporter:
             )
 
             # Write seqinfo.ini
+            fps = seq_info.get("fps")
             ini_lines = [
                 "[Sequence]",
                 f"name={seq_name}",
                 "imDir=img1",
-                f"frameRate={int(seq_info.get('fps', 30))}",
+                f"frameRate={round(fps) if fps else 'unknown'}",
                 f"seqLength={seq_info.get('total_frames', len(seq_info['frames']))}",
-                f"imWidth={seq_info.get('image_width', 1920)}",
-                f"imHeight={seq_info.get('image_height', 1080)}",
+                f"imWidth={seq_info['image_width']}",
+                f"imHeight={seq_info['image_height']}",
                 "imExt=.jpg",
             ]
             (seq_dir / "seqinfo.ini").write_text(
@@ -447,14 +492,15 @@ def main() -> None:
     p_build = subparsers.add_parser("build-master", help="Build Master JSON from .mat files")
     p_build.add_argument("--labels-dir", type=Path, required=True, help="Path to folder with *_LABELS.mat")
     p_build.add_argument("--metadata-file", type=Path, default=None, help="Path to Video_dataset_description.xlsx")
+    p_build.add_argument("--videos-dir", type=Path, default=None, help="Folder with matching .mp4 files; resolution/FPS are read from their headers")
     p_build.add_argument("--output", type=Path, default=Path("dataset_master.json"), help="Output path for master JSON")
 
     # Subcommand: export-yolo
     p_yolo = subparsers.add_parser("export-yolo", help="Export Master JSON to YOLO format")
     p_yolo.add_argument("--master", type=Path, required=True, help="Path to dataset_master.json")
     p_yolo.add_argument("--output-dir", type=Path, required=True, help="Output directory for YOLO labels")
-    p_yolo.add_argument("--image-width", type=int, default=1920, help="Image width for normalization")
-    p_yolo.add_argument("--image-height", type=int, default=1080, help="Image height for normalization")
+    p_yolo.add_argument("--image-width", type=int, default=None, help="Override per-sequence image width from the Master JSON")
+    p_yolo.add_argument("--image-height", type=int, default=None, help="Override per-sequence image height from the Master JSON")
     p_yolo.add_argument("--splits-dir", type=Path, default=None, help="Directory containing train/val/test video lists")
 
     # Subcommand: export-mot
@@ -475,15 +521,20 @@ def main() -> None:
     p_all = subparsers.add_parser("all", help="Run full pipeline: build-master, splits, yolo, and mot")
     p_all.add_argument("--labels-dir", type=Path, required=True)
     p_all.add_argument("--metadata-file", type=Path, default=None)
+    p_all.add_argument("--videos-dir", type=Path, default=None)
     p_all.add_argument("--output-dir", type=Path, default=Path("data/processed"))
 
     args = parser.parse_args()
 
     if args.command == "build-master":
         builder = MasterDatasetBuilder(
-            labels_dir=args.labels_dir, metadata_file=args.metadata_file
+            labels_dir=args.labels_dir,
+            metadata_file=args.metadata_file,
+            videos_dir=args.videos_dir,
         )
         data = builder.build()
+        for w in data["warnings"]:
+            print(f"WARNING: {w}")
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(json.dumps(data, indent=2), encoding="utf-8")
         print(f"Master JSON created at: {args.output} ({len(data['sequences'])} sequences)")
@@ -537,9 +588,13 @@ def main() -> None:
 
         print("=== 1. Building Master JSON ===")
         builder = MasterDatasetBuilder(
-            labels_dir=args.labels_dir, metadata_file=args.metadata_file
+            labels_dir=args.labels_dir,
+            metadata_file=args.metadata_file,
+            videos_dir=args.videos_dir,
         )
         data = builder.build()
+        for w in data["warnings"]:
+            print(f"WARNING: {w}")
         master_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
         print(f"Master JSON saved to: {master_path}")
 

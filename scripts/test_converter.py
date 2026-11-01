@@ -13,6 +13,7 @@ Tests:
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import struct
 import tempfile
@@ -37,6 +38,7 @@ from mcos_parser import (
     SequenceAnnotation,
 )
 from metadata_parser import MetadataCatalog, SequenceMetadata
+from video_probe import probe_mp4
 from convert_dataset import (
     MasterDatasetBuilder,
     MotExporter,
@@ -59,7 +61,9 @@ def make_cell(bboxes: list) -> bytes:
     dims = make_elem(5, struct.pack("<ii", len(bboxes), 4 if bboxes else 0))
     name = make_elem(1, b"")
     if bboxes:
-        raw_d = b"".join(struct.pack("<4d", *b) for b in bboxes)
+        # MATLAB serializes N x 4 matrices column-major: all x, all y, all w, all h.
+        column_major = [b[c] for c in range(4) for b in bboxes]
+        raw_d = struct.pack(f"<{len(column_major)}d", *column_major)
         d_elem = make_elem(9, raw_d)
     else:
         d_elem = make_elem(9, b"")
@@ -378,6 +382,152 @@ class TestDatasetConversionPipeline(unittest.TestCase):
         self.assertTrue((out_processed / "yolo" / "data.yaml").is_file())
         self.assertTrue((out_processed / "mot" / "V_DRONE_001" / "gt" / "gt.txt").is_file())
         self.assertTrue((out_processed / "splits" / "splits.json").is_file())
+
+
+class TestColumnMajorLayout(unittest.TestCase):
+    """Guard the MATLAB column-major N x 4 layout with hand-written bytes."""
+
+    def test_two_box_payload_is_column_major(self) -> None:
+        # x1, x2, y1, y2, w1, w2, h1, h2 written explicitly (not via make_cell's helper).
+        payload = struct.pack("<8d", 10.0, 400.0, 20.0, 50.0, 30.0, 60.0, 40.0, 70.0)
+        cell_payload = (
+            make_elem(6, struct.pack("<II", 0, 0))
+            + make_elem(5, struct.pack("<ii", 2, 4))
+            + make_elem(1, b"")
+            + make_elem(9, payload)
+        )
+        boxes = McosLabelParser()._extract_bboxes_from_cell(
+            cell_payload, 0, len(cell_payload), "<"
+        )
+        self.assertEqual(
+            [b.to_tuple() for b in boxes],
+            [(10.0, 20.0, 30.0, 40.0), (400.0, 50.0, 60.0, 70.0)],
+        )
+
+
+REAL_LABELS_ENV = "UAV_DATASET_LABELS_DIR"
+
+
+def _box(box_type: str, payload: bytes) -> bytes:
+    return struct.pack(">I4s", 8 + len(payload), box_type.encode("latin1")) + payload
+
+
+def build_synthetic_mp4(width: int, height: int, frames: int, timescale: int, delta: int) -> bytes:
+    """Minimal ISO-BMFF skeleton with only the boxes video_probe reads."""
+    mdhd = _box("mdhd", bytes(4) + struct.pack(">IIII", 0, 0, timescale, frames * delta) + bytes(4))
+    visual_entry = struct.pack(">I4s", 86, b"avc1") + bytes(24) + struct.pack(">HH", width, height) + bytes(50)
+    stsd = _box("stsd", bytes(4) + struct.pack(">I", 1) + visual_entry)
+    stts = _box("stts", bytes(4) + struct.pack(">III", 1, frames, delta))
+    stbl = _box("stbl", stsd + stts)
+    trak = _box("trak", _box("mdia", mdhd + _box("minf", stbl)))
+    return _box("ftyp", b"isom" + bytes(4)) + _box("moov", trak)
+
+
+class TestVideoGeometry(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.base = Path(self.temp_dir.name)
+        (self.base / "labels").mkdir()
+        (self.base / "videos").mkdir()
+        mat = build_synthetic_mat([([], [], [(10.0, 20.0, 30.0, 40.0)], [])] * 3)
+        (self.base / "labels" / "V_DRONE_001_LABELS.mat").write_bytes(mat)
+        (self.base / "labels" / "IR_DRONE_001_LABELS.mat").write_bytes(mat)
+
+    def tearDown(self) -> None:
+        self.temp_dir.cleanup()
+
+    def test_probe_synthetic_mp4(self) -> None:
+        path = self.base / "videos" / "x.mp4"
+        path.write_bytes(build_synthetic_mp4(640, 512, 301, 30000, 1000))
+        info = probe_mp4(path)
+        self.assertEqual((info.codec, info.width, info.height), ("avc1", 640, 512))
+        self.assertEqual(info.frame_count, 301)
+        self.assertEqual(info.fps, 30.0)
+
+    def test_sensor_defaults_are_marked_unverified(self) -> None:
+        master = MasterDatasetBuilder(self.base / "labels").build()
+        v = master["sequences"]["V_DRONE_001"]
+        ir = master["sequences"]["IR_DRONE_001"]
+        self.assertEqual((v["image_width"], v["image_height"]), (640, 512))
+        self.assertEqual((ir["image_width"], ir["image_height"]), (320, 256))
+        self.assertEqual(v["video_info_source"], "sensor_default_unverified")
+
+    def test_mp4_header_overrides_defaults_and_flags_frame_mismatch(self) -> None:
+        (self.base / "videos" / "V_DRONE_001.mp4").write_bytes(
+            build_synthetic_mp4(800, 600, 4, 25000, 1000)
+        )
+        builder = MasterDatasetBuilder(self.base / "labels", videos_dir=self.base / "videos")
+        master = builder.build()
+        v = master["sequences"]["V_DRONE_001"]
+        self.assertEqual((v["image_width"], v["image_height"], v["fps"]), (800, 600, 25.0))
+        self.assertEqual(v["video_info_source"], "mp4_header")
+        self.assertEqual(len(master["warnings"]), 1)  # 4 video frames vs 3 label frames
+
+    def test_yolo_uses_per_sequence_size(self) -> None:
+        master = MasterDatasetBuilder(self.base / "labels").build()
+        out = self.base / "yolo"
+        YoloExporter(out).export(master)
+        line = (out / "labels" / "IR_DRONE_001" / "frame_000000.txt").read_text(encoding="utf-8").split()
+        # box (10, 20, 30, 40) on 320x256 -> cx=25/320, cy=40/256
+        self.assertAlmostEqual(float(line[1]), 25 / 320, places=5)
+        self.assertAlmostEqual(float(line[2]), 40 / 256, places=5)
+
+
+@unittest.skipUnless(
+    os.environ.get(REAL_LABELS_ENV), f"{REAL_LABELS_ENV} not set; real-label checks skipped"
+)
+class TestRealLabelRegression(unittest.TestCase):
+    """Regression checks against real DroneDetectionThesis label files.
+
+    Point UAV_DATASET_LABELS_DIR to a local folder holding the original
+    *_LABELS.mat files. Each test skips when its file is absent. Expected
+    values were observed with this parser on the original files; they are
+    label-structure facts, not model performance numbers.
+    """
+
+    def _parse(self, name: str) -> SequenceAnnotation:
+        path = Path(os.environ[REAL_LABELS_ENV]) / f"{name}_LABELS.mat"
+        if not path.is_file():
+            self.skipTest(f"{path.name} not present")
+        return McosLabelParser().parse_file(path)
+
+    @staticmethod
+    def _boxes_per_frame(seq: SequenceAnnotation) -> dict:
+        hist: dict = {}
+        for fr in seq.frames:
+            hist[fr.total_boxes] = hist.get(fr.total_boxes, 0) + 1
+        return hist
+
+    def test_v_drone_001_single_target(self) -> None:
+        seq = self._parse("V_DRONE_001")
+        self.assertEqual(seq.total_frames, 301)
+        self.assertEqual(self._boxes_per_frame(seq), {1: 301})
+
+    def test_v_drone_108_two_drones_keep_continuity(self) -> None:
+        seq = self._parse("V_DRONE_108")
+        self.assertEqual(seq.total_frames, 304)
+        self.assertEqual(self._boxes_per_frame(seq), {1: 88, 2: 216})
+        # Every box in consecutive frames must overlap a box in the previous
+        # frame; a row-major misread breaks this at the 2-box -> 1-box switch.
+        for prev, cur in zip(seq.frames, seq.frames[1:]):
+            for b in cur.boxes_by_class["DRONE"]:
+                best = max(
+                    calculate_iou(p.to_tuple(), b.to_tuple())
+                    for p in prev.boxes_by_class["DRONE"]
+                )
+                self.assertGreater(best, 0.05, f"frame {cur.frame_index}")
+
+    def test_v_drone_108_track_ids(self) -> None:
+        self._parse("V_DRONE_108")  # skip if absent
+        builder = MasterDatasetBuilder(Path(os.environ[REAL_LABELS_ENV]))
+        seq = builder.build()["sequences"]["V_DRONE_108"]
+        ids = {a["track_id"] for fr in seq["frames"] for a in fr["annotations"]}
+        self.assertEqual(ids, {1, 2})
+
+    def test_ir_bird_001_two_object_frames_preserved(self) -> None:
+        seq = self._parse("IR_BIRD_001")
+        self.assertEqual(seq.total_frames, 310)
+        self.assertEqual(self._boxes_per_frame(seq), {1: 236, 2: 74})
 
 
 if __name__ == "__main__":

@@ -4,7 +4,7 @@
 
 > [!NOTE]
 > **외부 의존성 제로(Zero Dependencies)**
-> 이 도구들은 파이썬 표준 라이브러리(`struct`, `zlib`, `json`, `pathlib`, `zipfile`, `xml.etree.ElementTree`)만을 사용하여 구현되었습니다. MATLAB 소프트웨어나 `scipy`, `pandas`, `openpyxl` 등의 추가 패키지 설치 없이 표준 Python 3.8+ 환경에서 즉시 실행 가능합니다.
+> 이 도구들은 파이썬 표준 라이브러리(`struct`, `zlib`, `json`, `pathlib`, `zipfile`, `xml.etree.ElementTree`)만을 사용하여 구현되었습니다. MATLAB 소프트웨어나 `scipy`, `pandas`, `openpyxl` 등의 추가 패키지 설치 없이 실행됩니다.
 
 ---
 
@@ -28,7 +28,8 @@
 | `mcos_parser.py` | MATLAB v5 `.mat` 내부 MCOS `groundTruth` 객체를 파싱하여 5열 타임테이블 스트라이드와 가변 BBox `(N x 4)`를 디코딩 |
 | `metadata_parser.py` | `Video_dataset_description.xlsx`를 순수 파이썬으로 파싱하여 시퀀스별 메타데이터(거리 Bin, 기종, 촬영 출처) 추출 |
 | `convert_dataset.py` | 마스터 JSON 중간 표현 생성, YOLO txt 변환, MOT Challenge 변환, 계층화 Train/Val/Test 분할 생성 파이프라인 |
-| `test_converter.py` | 모의 바이너리 MAT5 버퍼 생성 및 파서·변환기 전수 단위 테스트 |
+| `video_probe.py` | 디코딩 없이 `.mp4` 헤더에서 코덱·해상도·프레임 수·FPS를 읽는 도구 |
+| `test_converter.py` | 모의 MAT5/MP4 버퍼 기반 단위 테스트 + 실제 라벨 파일 회귀 테스트(선택) |
 
 ---
 
@@ -38,7 +39,12 @@
 
 ```sh
 python scripts/test_converter.py -v
+
+# 원본 *_LABELS.mat가 있는 로컬 폴더로 실제 파일 회귀 테스트까지 실행
+UAV_DATASET_LABELS_DIR=data/raw/Video_V python scripts/test_converter.py -v
 ```
+
+환경 변수가 없거나 해당 파일이 없으면 실제 파일 테스트는 skip된다. 검증 환경은 Python 3.14(`uv run python`)이며 다른 버전은 미확인이다.
 
 ### 3.2 개별 `.mat` 라벨 파일 검사
 
@@ -60,6 +66,7 @@ python scripts/mcos_parser.py data/raw/Video_V/V_DRONE_001_LABELS.mat --json
 python scripts/convert_dataset.py all \
   --labels-dir data/raw/Video_V \
   --metadata-file data/raw/Video_dataset_description.xlsx \
+  --videos-dir data/raw/Video_V \
   --output-dir data/processed
 ```
 
@@ -106,9 +113,9 @@ python scripts/convert_dataset.py generate-splits \
 python scripts/convert_dataset.py export-yolo \
   --master data/processed/dataset_master.json \
   --output-dir data/processed/yolo \
-  --image-width 1920 --image-height 1080 \
   --splits-dir data/processed/splits
 ```
+영상 크기는 마스터 JSON의 시퀀스별 값을 사용한다. 모든 시퀀스에 같은 크기를 강제하려면 `--image-width W --image-height H`를 추가한다.
 
 #### D. MOT Challenge 형식 익스포트 (`export-mot`)
 ```sh
@@ -121,51 +128,43 @@ python scripts/convert_dataset.py export-mot \
 
 ## 4. 마스터 JSON 스키마 구조
 
+아래 `statistics` 값은 형식 설명용 자리표시자(`<int>`)이며 실제 통계가 아니다. `V_DRONE_001` 항목은 원본 라벨/영상 헤더에서 실제로 확인한 값이다.
+
 ```json
 {
   "schema_version": "1.0",
-  "created_at": "2026-11-01T07:30:00Z",
-  "classes": {
-    "0": "AIRPLANE",
-    "1": "BIRD",
-    "2": "DRONE",
-    "3": "HELICOPTER"
-  },
+  "created_at": "<ISO-8601 UTC>",
+  "classes": {"0": "AIRPLANE", "1": "BIRD", "2": "DRONE", "3": "HELICOPTER"},
   "statistics": {
-    "total_sequences": 285,
-    "total_frames": 88000,
-    "class_box_counts": {
-      "AIRPLANE": 18200,
-      "BIRD": 15400,
-      "DRONE": 36800,
-      "HELICOPTER": 17600
-    }
+    "total_sequences": "<int>",
+    "total_frames": "<int>",
+    "class_box_counts": {"AIRPLANE": "<int>", "BIRD": "<int>", "DRONE": "<int>", "HELICOPTER": "<int>"}
   },
+  "warnings": ["<영상 프레임 수와 라벨 프레임 수 불일치 등>"],
   "sequences": {
     "V_DRONE_001": {
       "sequence_name": "V_DRONE_001",
       "sensor": "V",
       "primary_class": "DRONE",
       "number": 1,
-      "distance_bin": "MEDIUM",
+      "distance_bin": "CLOSE",
       "drone_type": "F450",
       "source": "author",
       "is_multi_drone": false,
+      "label_file": "V_DRONE_001_LABELS.mat",
       "total_frames": 301,
       "fps": 30.0,
-      "image_width": 1920,
-      "image_height": 1080,
+      "image_width": 640,
+      "image_height": 512,
+      "video_frame_count": 301,
+      "video_info_source": "mp4_header",
+      "class_box_counts": {"AIRPLANE": 0, "BIRD": 0, "DRONE": 301, "HELICOPTER": 0},
       "frames": [
         {
           "frame_index": 0,
           "timestamp_sec": 0.0,
           "annotations": [
-            {
-              "class_id": 2,
-              "class_name": "DRONE",
-              "track_id": 1,
-              "bbox_xywh": [124.93, 22.94, 75.85, 39.2]
-            }
+            {"class_id": 2, "class_name": "DRONE", "track_id": 1, "bbox_xywh": [124.93, 22.94, 75.85, 39.2]}
           ]
         }
       ]
@@ -173,3 +172,20 @@ python scripts/convert_dataset.py export-mot \
   }
 }
 ```
+
+### 4.1 영상 크기·FPS 결정 규칙
+
+| `video_info_source` | 의미 |
+|---|---|
+| `mp4_header` | `--videos-dir`의 같은 이름 `.mp4` 헤더(`stsd`, `mdhd`, `stts`)에서 읽은 값 |
+| `sensor_default_unverified` | 영상이 없어 센서별 기본값(V 640x512, IR 320x256, 30 fps)을 쓴 값. 기본값은 `V_DRONE_001`, `IR_BIRD_001` 두 영상에서만 확인됨 |
+
+YOLO 정규화는 시퀀스별 `image_width/height`를 사용하며, `--image-width/--image-height`는 명시적 덮어쓰기용이다.
+
+### 4.2 Track ID에 대한 주의
+
+원본 라벨에는 객체 ID가 없다. `track_id`는 클래스별 탐욕적 IoU(> 0.05) 연결로 **파생한 값**이며, 해당 클래스 박스가 없는 프레임이 끼면 새 ID가 시작된다. 가까이 교차하는 다수 객체(예: 새 무리)에서는 ID 교환이 생길 수 있어 추적 평가 GT로 쓰기 전 검수가 필요하다.
+
+### 4.3 MATLAB 행렬 저장 순서
+
+한 프레임에 같은 클래스 객체가 N개면 라벨은 N x 4 double 행렬이며 MATLAB은 이를 **열 우선**(`x1..xN, y1..yN, w1..wN, h1..hN`)으로 저장한다. 행 우선으로 읽으면 2개 이상 객체 프레임의 좌표가 뒤섞인다(PR #6 초기 구현의 결함, 실제 파일 검증으로 발견·수정).
