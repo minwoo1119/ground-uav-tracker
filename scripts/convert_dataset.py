@@ -6,13 +6,15 @@ into:
     1. Master JSON (full metadata, per-frame BBoxes, 4-class mapping)
     2. YOLO format (normalized center_x, center_y, w, h txt files + data.yaml)
     3. MOT Challenge format (gt.txt with frame_id, track_id, bbox + seqinfo.ini)
-    4. Stratified video-level Train/Val/Test splits (70/15/15)
+    4. Stratified video-level Train/Val/Test splits (70/15/15, sensor-aware)
+    5. Dataset statistics and bounding-box size distribution report (analyze)
 
 Usage:
     python scripts/convert_dataset.py build-master --labels-dir data/raw/Video_V --output data/processed/dataset_master.json
     python scripts/convert_dataset.py export-yolo --master data/processed/dataset_master.json --output-dir data/processed/yolo
     python scripts/convert_dataset.py export-mot --master data/processed/dataset_master.json --output-dir data/processed/mot
     python scripts/convert_dataset.py generate-splits --master data/processed/dataset_master.json --output-dir data/processed/splits
+    python scripts/convert_dataset.py analyze --master data/processed/dataset_master.json --output data/processed/dataset_stats.json
     python scripts/convert_dataset.py all --labels-dir data/raw/Video_V --output-dir data/processed
 """
 
@@ -403,6 +405,7 @@ class SplitGenerator:
         test_ratio: float = 0.15,
         seed: int = 42,
         keep_multi_in_test: bool = True,
+        sensor_filter: Optional[str] = None,
     ) -> None:
         total = train_ratio + val_ratio + test_ratio
         if abs(total - 1.0) > 1e-4:
@@ -414,6 +417,7 @@ class SplitGenerator:
         self.test_ratio = test_ratio
         self.seed = seed
         self.keep_multi_in_test = keep_multi_in_test
+        self.sensor_filter = sensor_filter.upper() if sensor_filter else None
 
     def generate(
         self, master_data: Dict[str, Any]
@@ -421,20 +425,30 @@ class SplitGenerator:
         rng = random.Random(self.seed)
 
         sequences = list(master_data["sequences"].values())
+        if self.sensor_filter:
+            sequences = [
+                s for s in sequences if s.get("sensor", "").upper() == self.sensor_filter
+            ]
+
         train_seqs: List[str] = []
         val_seqs: List[str] = []
         test_seqs: List[str] = []
 
-        # Group by stratum: (primary_class, distance_bin)
-        strata: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
+        # Group by stratum: (sensor, primary_class, distance_bin)
+        strata: Dict[Tuple[str, str, str], List[Dict[str, Any]]] = {}
         for s in sequences:
             if self.keep_multi_in_test and s.get("is_multi_drone", False):
                 test_seqs.append(s["sequence_name"])
                 continue
-            key = (s.get("primary_class", "UNKNOWN"), s.get("distance_bin", "UNKNOWN"))
+            key = (
+                s.get("sensor", "UNKNOWN"),
+                s.get("primary_class", "UNKNOWN"),
+                s.get("distance_bin", "UNKNOWN"),
+            )
             strata.setdefault(key, []).append(s)
 
-        for key, group in strata.items():
+        for key in sorted(strata.keys()):
+            group = strata[key]
             rng.shuffle(group)
             n = len(group)
             n_train = int(round(n * self.train_ratio))
@@ -469,6 +483,8 @@ class SplitGenerator:
             )
 
         summary = {
+            "sensor_filter": self.sensor_filter,
+            "stratification_axes": ["sensor", "primary_class", "distance_bin"],
             "ratios": {
                 "train": self.train_ratio,
                 "val": self.val_ratio,
@@ -480,6 +496,200 @@ class SplitGenerator:
         (output_dir / "splits.json").write_text(
             json.dumps(summary, indent=2), encoding="utf-8"
         )
+
+
+def _quantile(sorted_vals: List[float], q: float) -> Optional[float]:
+    if not sorted_vals:
+        return None
+    if len(sorted_vals) == 1:
+        return round(sorted_vals[0], 2)
+    pos = (len(sorted_vals) - 1) * q
+    lo = int(pos)
+    hi = min(lo + 1, len(sorted_vals) - 1)
+    frac = pos - lo
+    return round(sorted_vals[lo] * (1.0 - frac) + sorted_vals[hi] * frac, 2)
+
+
+class DatasetAnalyzer:
+    """Computes sequence, frame, and bounding-box size distributions from Master JSON."""
+
+    TINY_AREA = 16.0 * 16.0       # 256 px^2
+    SMALL_AREA = 32.0 * 32.0      # 1024 px^2 (COCO Small threshold)
+    MEDIUM_AREA = 96.0 * 96.0     # 9216 px^2 (COCO Medium threshold)
+
+    def analyze(self, master_data: Dict[str, Any]) -> Dict[str, Any]:
+        sequences = master_data.get("sequences", {})
+        by_class: Dict[str, Dict[str, Any]] = {}
+        for cls_name in CLASS_TO_ID:
+            by_class[cls_name] = {
+                "sequence_count": 0,
+                "sequence_frames": 0,
+                "frames_with_class": 0,
+                "empty_frames_in_primary_seqs": 0,
+                "multi_object_frames_in_primary_seqs": 0,
+                "box_count": 0,
+                "widths": [],
+                "heights": [],
+                "areas": [],
+                "size_buckets": {
+                    "tiny_lt_16x16": 0,
+                    "small_16x16_to_32x32": 0,
+                    "coco_small_lt_32x32": 0,
+                    "coco_medium_32x32_to_96x96": 0,
+                    "coco_large_ge_96x96": 0,
+                },
+            }
+
+        total_frames = 0
+        total_empty_frames = 0
+        total_multi_box_frames = 0
+        all_areas: List[float] = []
+        all_widths: List[float] = []
+        all_heights: List[float] = []
+        overall_buckets = {
+            "tiny_lt_16x16": 0,
+            "small_16x16_to_32x32": 0,
+            "coco_small_lt_32x32": 0,
+            "coco_medium_32x32_to_96x96": 0,
+            "coco_large_ge_96x96": 0,
+        }
+
+        for seq in sequences.values():
+            p_cls = seq.get("primary_class", "UNKNOWN")
+            n_frames = seq.get("total_frames", len(seq.get("frames", [])))
+            total_frames += n_frames
+            if p_cls in by_class:
+                by_class[p_cls]["sequence_count"] += 1
+                by_class[p_cls]["sequence_frames"] += n_frames
+
+            for frame in seq.get("frames", []):
+                anns = frame.get("annotations", [])
+                if not anns:
+                    total_empty_frames += 1
+                    if p_cls in by_class:
+                        by_class[p_cls]["empty_frames_in_primary_seqs"] += 1
+                elif len(anns) >= 2:
+                    total_multi_box_frames += 1
+                    if p_cls in by_class:
+                        by_class[p_cls]["multi_object_frames_in_primary_seqs"] += 1
+
+                present_classes: Set[str] = set()
+                for ann in anns:
+                    c_name = ann["class_name"]
+                    present_classes.add(c_name)
+                    _, _, w, h = ann["bbox_xywh"]
+                    area = w * h
+                    all_widths.append(w)
+                    all_heights.append(h)
+                    all_areas.append(area)
+
+                    c_entry = by_class[c_name]
+                    c_entry["box_count"] += 1
+                    c_entry["widths"].append(w)
+                    c_entry["heights"].append(h)
+                    c_entry["areas"].append(area)
+
+                    for buckets in (c_entry["size_buckets"], overall_buckets):
+                        if area < self.TINY_AREA:
+                            buckets["tiny_lt_16x16"] += 1
+                            buckets["coco_small_lt_32x32"] += 1
+                        elif area < self.SMALL_AREA:
+                            buckets["small_16x16_to_32x32"] += 1
+                            buckets["coco_small_lt_32x32"] += 1
+                        elif area < self.MEDIUM_AREA:
+                            buckets["coco_medium_32x32_to_96x96"] += 1
+                        else:
+                            buckets["coco_large_ge_96x96"] += 1
+
+                for c_name in present_classes:
+                    if c_name in by_class:
+                        by_class[c_name]["frames_with_class"] += 1
+
+        class_summaries: Dict[str, Any] = {}
+        for cls_name, c_entry in by_class.items():
+            ws = sorted(c_entry["widths"])
+            hs = sorted(c_entry["heights"])
+            ars = sorted(c_entry["areas"])
+            bc = c_entry["box_count"]
+            sb = c_entry["size_buckets"]
+            class_summaries[cls_name] = {
+                "sequence_count": c_entry["sequence_count"],
+                "sequence_frames": c_entry["sequence_frames"],
+                "frames_with_class": c_entry["frames_with_class"],
+                "empty_frames_in_primary_seqs": c_entry["empty_frames_in_primary_seqs"],
+                "multi_object_frames_in_primary_seqs": c_entry["multi_object_frames_in_primary_seqs"],
+                "box_count": bc,
+                "width_px": {
+                    "min": _quantile(ws, 0.0),
+                    "p25": _quantile(ws, 0.25),
+                    "median": _quantile(ws, 0.50),
+                    "p75": _quantile(ws, 0.75),
+                    "max": _quantile(ws, 1.0),
+                    "mean": round(sum(ws) / len(ws), 2) if ws else None,
+                },
+                "height_px": {
+                    "min": _quantile(hs, 0.0),
+                    "p25": _quantile(hs, 0.25),
+                    "median": _quantile(hs, 0.50),
+                    "p75": _quantile(hs, 0.75),
+                    "max": _quantile(hs, 1.0),
+                    "mean": round(sum(hs) / len(hs), 2) if hs else None,
+                },
+                "area_px2": {
+                    "min": _quantile(ars, 0.0),
+                    "p25": _quantile(ars, 0.25),
+                    "median": _quantile(ars, 0.50),
+                    "p75": _quantile(ars, 0.75),
+                    "max": _quantile(ars, 1.0),
+                    "mean": round(sum(ars) / len(ars), 2) if ars else None,
+                },
+                "size_buckets": sb,
+                "size_ratios": {
+                    k: round(v / bc, 4) if bc > 0 else 0.0 for k, v in sb.items()
+                },
+            }
+
+        all_ws = sorted(all_widths)
+        all_hs = sorted(all_heights)
+        all_ars = sorted(all_areas)
+        total_boxes = len(all_areas)
+        return {
+            "total_sequences": len(sequences),
+            "total_frames": total_frames,
+            "total_empty_frames": total_empty_frames,
+            "total_multi_box_frames": total_multi_box_frames,
+            "total_boxes": total_boxes,
+            "overall_width_px": {
+                "min": _quantile(all_ws, 0.0),
+                "p25": _quantile(all_ws, 0.25),
+                "median": _quantile(all_ws, 0.50),
+                "p75": _quantile(all_ws, 0.75),
+                "max": _quantile(all_ws, 1.0),
+                "mean": round(sum(all_ws) / len(all_ws), 2) if all_ws else None,
+            },
+            "overall_height_px": {
+                "min": _quantile(all_hs, 0.0),
+                "p25": _quantile(all_hs, 0.25),
+                "median": _quantile(all_hs, 0.50),
+                "p75": _quantile(all_hs, 0.75),
+                "max": _quantile(all_hs, 1.0),
+                "mean": round(sum(all_hs) / len(all_hs), 2) if all_hs else None,
+            },
+            "overall_area_px2": {
+                "min": _quantile(all_ars, 0.0),
+                "p25": _quantile(all_ars, 0.25),
+                "median": _quantile(all_ars, 0.50),
+                "p75": _quantile(all_ars, 0.75),
+                "max": _quantile(all_ars, 1.0),
+                "mean": round(sum(all_ars) / len(all_ars), 2) if all_ars else None,
+            },
+            "overall_size_buckets": overall_buckets,
+            "overall_size_ratios": {
+                k: round(v / total_boxes, 4) if total_boxes > 0 else 0.0
+                for k, v in overall_buckets.items()
+            },
+            "by_class": class_summaries,
+        }
 
 
 def main() -> None:
@@ -516,12 +726,19 @@ def main() -> None:
     p_split.add_argument("--val-ratio", type=float, default=0.15)
     p_split.add_argument("--test-ratio", type=float, default=0.15)
     p_split.add_argument("--seed", type=int, default=42)
+    p_split.add_argument("--sensor", type=str, default=None, help="Optional sensor filter (e.g. V or IR)")
+
+    # Subcommand: analyze
+    p_analyze = subparsers.add_parser("analyze", help="Compute dataset statistics and BBox size distributions")
+    p_analyze.add_argument("--master", type=Path, required=True, help="Path to dataset_master.json")
+    p_analyze.add_argument("--output", type=Path, default=None, help="Optional path to save stats JSON")
 
     # Subcommand: all
     p_all = subparsers.add_parser("all", help="Run full pipeline: build-master, splits, yolo, and mot")
     p_all.add_argument("--labels-dir", type=Path, required=True)
     p_all.add_argument("--metadata-file", type=Path, default=None)
     p_all.add_argument("--videos-dir", type=Path, default=None)
+    p_all.add_argument("--sensor", type=str, default=None, help="Optional sensor filter for splits (e.g. V or IR)")
     p_all.add_argument("--output-dir", type=Path, default=Path("data/processed"))
 
     args = parser.parse_args()
@@ -574,12 +791,24 @@ def main() -> None:
             val_ratio=args.val_ratio,
             test_ratio=args.test_ratio,
             seed=args.seed,
+            sensor_filter=args.sensor,
         )
         splits = gen.generate(master_data)
         gen.save_splits(splits, args.output_dir)
         print(
             f"Splits generated: train={len(splits['train'])}, val={len(splits['val'])}, test={len(splits['test'])}"
         )
+
+    elif args.command == "analyze":
+        master_data = json.loads(args.master.read_text(encoding="utf-8"))
+        analyzer = DatasetAnalyzer()
+        report = analyzer.analyze(master_data)
+        if args.output:
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            args.output.write_text(json.dumps(report, indent=2), encoding="utf-8")
+            print(f"Analysis report saved to: {args.output}")
+        else:
+            print(json.dumps(report, indent=2))
 
     elif args.command == "all":
         out = args.output_dir
@@ -600,7 +829,7 @@ def main() -> None:
 
         print("=== 2. Generating Stratified Splits ===")
         splits_dir = out / "splits"
-        gen = SplitGenerator()
+        gen = SplitGenerator(sensor_filter=args.sensor)
         splits = gen.generate(data)
         gen.save_splits(splits, splits_dir)
         print(f"Splits saved to: {splits_dir}")
@@ -616,6 +845,12 @@ def main() -> None:
         mot_exp = MotExporter(output_dir=mot_dir)
         mot_exp.export(master_data=data)
         print(f"MOT sequences saved to: {mot_dir}")
+
+        print("=== 5. Analyzing Dataset Statistics ===")
+        stats_path = out / "dataset_stats.json"
+        report = DatasetAnalyzer().analyze(data)
+        stats_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+        print(f"Dataset statistics saved to: {stats_path}")
 
         print("=== Full Pipeline Completed Successfully ===")
 

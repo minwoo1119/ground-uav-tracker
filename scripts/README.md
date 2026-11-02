@@ -1,6 +1,6 @@
 # 오프라인 데이터셋 전처리 및 변환 도구
 
-이 디렉터리는 DroneDetectionThesis(Halmstad University) 등 항공체 관측 데이터셋의 MATLAB `.mat` 라벨을 디코딩하고, 4클래스 기준 마스터 JSON 및 파생 어노테이션(YOLO, MOT Challenge, 데이터 분할)으로 변환하는 오프라인 파이썬 도구를 제공합니다.
+이 디렉터리는 DroneDetectionThesis(Halmstad University) 등 항공체 관측 데이터셋의 MATLAB `.mat` 라벨을 디코딩하고, 4클래스 기준 마스터 JSON 및 파생 어노테이션(YOLO, MOT Challenge, 데이터 분할, 크기 분포 통계)으로 변환하는 오프라인 파이썬 도구를 제공합니다.
 
 > [!NOTE]
 > **외부 의존성 제로(Zero Dependencies)**
@@ -27,7 +27,7 @@
 |---|---|
 | `mcos_parser.py` | MATLAB v5 `.mat` 내부 MCOS `groundTruth` 객체를 파싱하여 5열 타임테이블 스트라이드와 가변 BBox `(N x 4)`를 디코딩 |
 | `metadata_parser.py` | `Video_dataset_description.xlsx`를 순수 파이썬으로 파싱하여 시퀀스별 메타데이터(거리 Bin, 기종, 촬영 출처) 추출 |
-| `convert_dataset.py` | 마스터 JSON 중간 표현 생성, YOLO txt 변환, MOT Challenge 변환, 계층화 Train/Val/Test 분할 생성 파이프라인 |
+| `convert_dataset.py` | 마스터 JSON 중간 표현 생성, YOLO txt 변환, MOT Challenge 변환, 센서별 계층화 Train/Val/Test 분할, 데이터셋 통계(`analyze`) 생성 파이프라인 |
 | `video_probe.py` | 디코딩 없이 `.mp4` 헤더에서 코덱·해상도·프레임 수·FPS를 읽는 도구 |
 | `test_converter.py` | 모의 MAT5/MP4 버퍼 기반 단위 테스트 + 실제 라벨 파일 회귀 테스트(선택) |
 
@@ -60,13 +60,14 @@ python scripts/mcos_parser.py data/raw/Video_V/V_DRONE_001_LABELS.mat --json
 
 ### 3.3 전체 파이프라인 일괄 실행 (`all`)
 
-라벨 디렉터리로부터 마스터 JSON, 계층화 분할, YOLO 라벨, MOT 시퀀스를 한 번에 생성합니다.
+라벨 디렉터리로부터 마스터 JSON, 계층화 분할, YOLO 라벨, MOT 시퀀스, 통계 리포트를 한 번에 생성합니다.
 
 ```sh
 python scripts/convert_dataset.py all \
   --labels-dir data/raw/Video_V \
   --metadata-file data/raw/Video_dataset_description.xlsx \
   --videos-dir data/raw/Video_V \
+  --sensor V \
   --output-dir data/processed
 ```
 
@@ -74,6 +75,7 @@ python scripts/convert_dataset.py all \
 ```text
 data/processed/
 ├── dataset_master.json       # 통합 마스터 어노테이션 JSON
+├── dataset_stats.json        # 전수 프레임·클래스·크기 분포 통계 JSON
 ├── splits/
 │   ├── splits.json           # 분할 요약 메타데이터
 │   ├── train_videos.txt      # 학습용 시퀀스 목록 (70%)
@@ -100,11 +102,12 @@ python scripts/convert_dataset.py build-master \
 ```
 
 #### B. 계층화 분할 생성 (`generate-splits`)
-클래스 4종과 거리 구간(CLOSE/MEDIUM/DISTANT)을 균등 배분하여 70 : 15 : 15 분할을 생성합니다. 다중 드론 영상은 자동으로 test 세트에 배정됩니다.
+센서(`V`/`IR`), 클래스 4종, 거리 구간(CLOSE/MEDIUM/DISTANT)을 균등 배분하여 70 : 15 : 15 분할을 생성합니다. `--sensor V` 옵션으로 특정 센서만 필터링할 수 있으며, 다중 드론 영상은 자동으로 test 세트에 배정됩니다.
 ```sh
 python scripts/convert_dataset.py generate-splits \
   --master data/processed/dataset_master.json \
   --output-dir data/processed/splits \
+  --sensor V \
   --train-ratio 0.70 --val-ratio 0.15 --test-ratio 0.15 --seed 42
 ```
 
@@ -124,11 +127,18 @@ python scripts/convert_dataset.py export-mot \
   --output-dir data/processed/mot
 ```
 
+#### E. 데이터셋 통계 및 객체 크기 분포 분석 (`analyze`)
+```sh
+python scripts/convert_dataset.py analyze \
+  --master data/processed/dataset_master.json \
+  --output data/processed/dataset_stats.json
+```
+
 ---
 
 ## 4. 마스터 JSON 스키마 구조
 
-아래 `statistics` 값은 형식 설명용 자리표시자(`<int>`)이며 실제 통계가 아니다. `V_DRONE_001` 항목은 원본 라벨/영상 헤더에서 실제로 확인한 값이다.
+아래 `statistics`와 `V_DRONE_001` 항목은 RGB 285개 원본 라벨 및 샘플 영상 헤더에서 실제로 확인한 값이다.
 
 ```json
 {
@@ -136,9 +146,9 @@ python scripts/convert_dataset.py export-mot \
   "created_at": "<ISO-8601 UTC>",
   "classes": {"0": "AIRPLANE", "1": "BIRD", "2": "DRONE", "3": "HELICOPTER"},
   "statistics": {
-    "total_sequences": "<int>",
-    "total_frames": "<int>",
-    "class_box_counts": {"AIRPLANE": "<int>", "BIRD": "<int>", "DRONE": "<int>", "HELICOPTER": "<int>"}
+    "total_sequences": 285,
+    "total_frames": 89233,
+    "class_box_counts": {"AIRPLANE": 18586, "BIRD": 21775, "DRONE": 36316, "HELICOPTER": 19568}
   },
   "warnings": ["<영상 프레임 수와 라벨 프레임 수 불일치 등>"],
   "sequences": {
