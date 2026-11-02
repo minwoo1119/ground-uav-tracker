@@ -49,9 +49,19 @@ CliOptions parse_cli(std::span<const std::string_view> arguments) {
         throw std::invalid_argument("--input may only be specified once");
       }
       options.input_source = require_value(arguments, index, argument);
+    } else if (argument == "--replay-mot") {
+      if (options.replay_mot_dir.has_value()) {
+        throw std::invalid_argument("--replay-mot may only be specified once");
+      }
+      options.replay_mot_dir = require_value(arguments, index, argument);
+      options.action = CliAction::replay_mot;
     } else {
       throw std::invalid_argument("unknown option: " + std::string{argument});
     }
+  }
+
+  if (options.action == CliAction::replay_mot) {
+    return options;
   }
 
   if (!options.config_path.has_value()) {
@@ -69,13 +79,14 @@ std::string cli_usage() {
       "  uav-tracker --help\n"
       "  uav-tracker --version\n"
       "  uav-tracker self-check\n"
+      "  uav-tracker --replay-mot <mot-sequence-dir>\n"
       "  uav-tracker --config <path> --input <source>\n"
       "\n"
       "Options:\n"
-      "  --config <path>   Configuration file path\n"
-      "  --input <source>  Future video file, device, or stream source\n"
-      "\n"
-      "The detection and tracking runtime is not implemented yet.\n";
+      "  --replay-mot <dir>  Replay a MOT Challenge sequence directory "
+      "(seqinfo.ini + gt/gt.txt) through KalmanIoUTracker\n"
+      "  --config <path>     Configuration file path\n"
+      "  --input <source>    Video file, device, or stream source\n";
 }
 
 }  // namespace uav

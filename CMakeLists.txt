@@ -8,6 +8,7 @@ project(
 )
 
 option(UAV_ENABLE_TENSORRT "Enable the future TensorRT detector adapter" OFF)
+option(UAV_ENABLE_OPENCV "Enable OpenCV video input adapter when available" ON)
 option(UAV_BUILD_TESTS "Build unit tests" ON)
 
 if(UAV_ENABLE_TENSORRT)
@@ -23,6 +24,10 @@ add_library(uav_core
   src/core/cli.cpp
   src/core/pipeline.cpp
   src/core/types.cpp
+  src/detection/mot_replay_detector.cpp
+  src/tracking/kalman_iou_tracker.cpp
+  src/video/mot_sequence_source.cpp
+  src/video/opencv_frame_source.cpp
 )
 add_library(uav::core ALIAS uav_core)
 target_compile_features(uav_core PUBLIC cxx_std_20)
@@ -31,6 +36,21 @@ target_include_directories(uav_core PUBLIC
   $<INSTALL_INTERFACE:include>
 )
 uav_set_warnings(uav_core)
+
+if(UAV_ENABLE_OPENCV)
+  find_package(OpenCV QUIET COMPONENTS core videoio)
+  if(OpenCV_FOUND)
+    message(STATUS "OpenCV found (${OpenCV_VERSION}); enabling OpenCvFrameSource")
+    target_compile_definitions(uav_core PUBLIC UAV_HAS_OPENCV=1)
+    target_link_libraries(uav_core PUBLIC ${OpenCV_LIBS})
+    target_include_directories(uav_core PUBLIC ${OpenCV_INCLUDE_DIRS})
+  else()
+    message(STATUS "OpenCV not found; building with UAV_HAS_OPENCV=0 (MOT replay and KalmanIoUTracker remain enabled)")
+    target_compile_definitions(uav_core PUBLIC UAV_HAS_OPENCV=0)
+  endif()
+else()
+  target_compile_definitions(uav_core PUBLIC UAV_HAS_OPENCV=0)
+endif()
 
 add_executable(uav-tracker apps/uav_tracker_main.cpp)
 target_link_libraries(uav-tracker PRIVATE uav::core)

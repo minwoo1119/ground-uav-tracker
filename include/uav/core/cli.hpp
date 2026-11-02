@@ -9,6 +9,7 @@ namespace uav {
 
 enum class CliAction {
   run,
+  replay_mot,
   show_help,
   show_version,
   self_check,
@@ -18,6 +19,7 @@ struct CliOptions {
   CliAction action{CliAction::run};
   std::optional<std::string> config_path{};
   std::optional<std::string> input_source{};
+  std::optional<std::string> replay_mot_dir{};
 };
 
 [[nodiscard]] CliOptions parse_cli(std::span<const std::string_view> arguments);
