@@ -23,3 +23,9 @@ CMakeUserPresets.json
 *.avi
 *.mov
 *.mkv
+
+# Python cache and temporary files
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
