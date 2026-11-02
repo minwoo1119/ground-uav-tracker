@@ -40,6 +40,7 @@ from mcos_parser import (
 from metadata_parser import MetadataCatalog, SequenceMetadata
 from video_probe import probe_mp4
 from convert_dataset import (
+    DatasetAnalyzer,
     MasterDatasetBuilder,
     MotExporter,
     SplitGenerator,
@@ -382,6 +383,57 @@ class TestDatasetConversionPipeline(unittest.TestCase):
         self.assertTrue((out_processed / "yolo" / "data.yaml").is_file())
         self.assertTrue((out_processed / "mot" / "V_DRONE_001" / "gt" / "gt.txt").is_file())
         self.assertTrue((out_processed / "splits" / "splits.json").is_file())
+        self.assertTrue((out_processed / "dataset_stats.json").is_file())
+
+    def test_split_generator_sensor_filter(self) -> None:
+        master = {
+            "sequences": {
+                **{
+                    f"V_DRONE_{i:03d}": {
+                        "sequence_name": f"V_DRONE_{i:03d}",
+                        "sensor": "V",
+                        "primary_class": "DRONE",
+                        "distance_bin": "MEDIUM",
+                        "is_multi_drone": False,
+                    }
+                    for i in range(1, 11)
+                },
+                **{
+                    f"IR_DRONE_{i:03d}": {
+                        "sequence_name": f"IR_DRONE_{i:03d}",
+                        "sensor": "IR",
+                        "primary_class": "DRONE",
+                        "distance_bin": "MEDIUM",
+                        "is_multi_drone": False,
+                    }
+                    for i in range(1, 6)
+                },
+            }
+        }
+        gen_v = SplitGenerator(sensor_filter="V", seed=42)
+        splits_v = gen_v.generate(master)
+        assigned_v = splits_v["train"] + splits_v["val"] + splits_v["test"]
+        self.assertEqual(len(assigned_v), 10)
+        self.assertTrue(all(s.startswith("V_") for s in assigned_v))
+
+    def test_dataset_analyzer(self) -> None:
+        builder = MasterDatasetBuilder(labels_dir=self.raw_dir)
+        master = builder.build()
+        report = DatasetAnalyzer().analyze(master)
+        self.assertEqual(report["total_sequences"], 2)
+        self.assertEqual(report["total_frames"], 4)
+        self.assertEqual(report["total_boxes"], 4)
+        # V_DRONE_001 has 50x50=2500 (coco_medium), V_BIRD_001 has 30x30=900 (coco_small)
+        self.assertEqual(report["by_class"]["DRONE"]["box_count"], 2)
+        self.assertEqual(
+            report["by_class"]["DRONE"]["size_buckets"]["coco_medium_32x32_to_96x96"],
+            2,
+        )
+        self.assertEqual(report["by_class"]["BIRD"]["box_count"], 2)
+        self.assertEqual(
+            report["by_class"]["BIRD"]["size_buckets"]["coco_small_lt_32x32"],
+            2,
+        )
 
 
 class TestColumnMajorLayout(unittest.TestCase):
