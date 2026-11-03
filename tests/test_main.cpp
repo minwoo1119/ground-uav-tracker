@@ -1,10 +1,16 @@
 #include "uav/core/cli.hpp"
 #include "uav/core/pipeline.hpp"
 #include "uav/core/types.hpp"
+#include "uav/detection/mot_replay_detector.hpp"
+#include "uav/tracking/kalman_iou_tracker.hpp"
+#include "uav/video/mot_sequence_source.hpp"
+#include "uav/video/opencv_frame_source.hpp"
 
 #include <array>
 #include <cmath>
 #include <exception>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <optional>
 #include <span>
@@ -116,6 +122,16 @@ void test_cli_options() {
           "configuration path is parsed");
   require(options.input_source == "camera0", "input source is parsed");
 
+  const std::array replay{
+      std::string_view{"--replay-mot"},
+      std::string_view{"data/processed/mot/V_DRONE_001"},
+  };
+  const auto replay_options = uav::parse_cli(replay);
+  require(replay_options.action == uav::CliAction::replay_mot,
+          "replay_mot action is parsed");
+  require(replay_options.replay_mot_dir == "data/processed/mot/V_DRONE_001",
+          "replay_mot_dir is parsed");
+
   const std::array unknown{std::string_view{"--unknown"}};
   require_invalid_argument(
       [&] { static_cast<void>(uav::parse_cli(unknown)); }, "unknown option");
@@ -157,6 +173,152 @@ void test_pipeline_summary() {
   require(summary.tracks_produced == 0U, "no synthetic tracks are produced");
 }
 
+void test_kalman_fast_motion_and_velocity() {
+  // Target is 20x20 px moving +25 px/frame horizontally.
+  // Note: consecutive boxes are 25 px apart, so raw IoU between frame t-1 and t
+  // is ZERO (20 < 25). Without Kalman velocity prediction, IoU matching fails!
+  // On frame 1->2, initial velocity is 0, so we start with a 10 px step to
+  // establish velocity, then accelerate to 25 px steps where raw IoU == 0.
+  uav::KalmanIoUTracker tracker{uav::TrackerConfig{
+      .iou_threshold = 0.15F,
+      .min_hits_to_confirm = 3U,
+      .max_missed_frames = 4U,
+  }};
+
+  const std::array<float, 6> x_positions{100.0F, 112.0F, 130.0F,
+                                         152.0F, 175.0F, 198.0F};
+  for (std::size_t idx = 0; idx < x_positions.size(); ++idx) {
+    const uav::Frame frame{
+        .id = static_cast<uav::FrameId>(idx + 1U),
+        .captured_at = uav::Timestamp{static_cast<std::int64_t>(idx * 33'333)},
+        .image_size = {.width = 640, .height = 512},
+    };
+    const std::array detections{uav::Detection{
+        .class_id = 2,
+        .confidence = 0.95F,
+        .bounds = {.x = x_positions[idx],
+                   .y = 200.0F,
+                   .width = 20.0F,
+                   .height = 20.0F},
+        .class_name = "DRONE",
+    }};
+    const auto tracks = tracker.update(frame, detections);
+    require(tracks.size() == 1U, "single track maintained during fast motion");
+    require(tracks[0].id == 1U, "same track ID preserved across fast motion");
+    if (idx < 2U) {
+      require(tracks[0].state == uav::TrackState::tentative,
+              "track starts tentative before min_hits_to_confirm");
+    } else {
+      require(tracks[0].state == uav::TrackState::confirmed,
+              "track becomes confirmed at hit 3");
+    }
+  }
+}
+
+void test_kalman_occlusion_recovery_and_removal() {
+  uav::KalmanIoUTracker tracker{uav::TrackerConfig{
+      .iou_threshold = 0.15F,
+      .min_hits_to_confirm = 2U,
+      .max_missed_frames = 2U,
+  }};
+
+  auto make_frame = [](uav::FrameId id) {
+    return uav::Frame{
+        .id = id,
+        .captured_at =
+            uav::Timestamp{static_cast<std::int64_t>((id - 1U) * 33'333)},
+        .image_size = {.width = 640, .height = 512},
+    };
+  };
+  auto make_det = [](float x) {
+    return std::vector<uav::Detection>{uav::Detection{
+        .class_id = 2,
+        .confidence = 0.9F,
+        .bounds = {.x = x, .y = 100.0F, .width = 30.0F, .height = 30.0F},
+        .class_name = "DRONE",
+    }};
+  };
+
+  // Frame 1 & 2: detected moving +10 px/frame -> confirmed
+  auto tracks = tracker.update(make_frame(1), make_det(100.0F));
+  require(tracks.size() == 1U && tracks[0].state == uav::TrackState::tentative,
+          "frame 1 tentative");
+  tracks = tracker.update(make_frame(2), make_det(110.0F));
+  require(tracks.size() == 1U && tracks[0].state == uav::TrackState::confirmed,
+          "frame 2 confirmed");
+
+  // Frame 3 & 4: missed detection (occlusion) -> state becomes lost, predicted
+  // position advances along velocity (+10 px/frame)
+  tracks = tracker.update(make_frame(3), {});
+  require(tracks.size() == 1U && tracks[0].state == uav::TrackState::lost &&
+              tracks[0].missed_frames == 1U,
+          "frame 3 lost (missed=1)");
+  tracks = tracker.update(make_frame(4), {});
+  require(tracks.size() == 1U && tracks[0].state == uav::TrackState::lost &&
+              tracks[0].missed_frames == 2U,
+          "frame 4 lost (missed=2)");
+
+  // Frame 5: target reappears near predicted x ~ 140 -> recovers same ID=1!
+  tracks = tracker.update(make_frame(5), make_det(140.0F));
+  require(tracks.size() == 1U && tracks[0].id == 1U &&
+              tracks[0].state == uav::TrackState::confirmed &&
+              tracks[0].missed_frames == 0U,
+          "frame 5 recovered same track ID=1 after 2 missed frames");
+
+  // Frame 6, 7, 8: 3 consecutive misses (> max_missed_frames=2) -> removed
+  static_cast<void>(tracker.update(make_frame(6), {}));
+  static_cast<void>(tracker.update(make_frame(7), {}));
+  tracks = tracker.update(make_frame(8), {});
+  require(tracks.empty(), "track is purged once missed_frames > max_missed");
+}
+
+void test_mot_replay_end_to_end() {
+  const auto temp_dir =
+      std::filesystem::temp_directory_path() / "uav_mot_replay_test";
+  std::filesystem::remove_all(temp_dir);
+  std::filesystem::create_directories(temp_dir / "gt");
+
+  {
+    std::ofstream ini{temp_dir / "seqinfo.ini"};
+    ini << "[Sequence]\n"
+        << "name=SYNTH_DRONE\n"
+        << "frameRate=30\n"
+        << "seqLength=4\n"
+        << "imWidth=640\n"
+        << "imHeight=512\n";
+  }
+  {
+    std::ofstream gt{temp_dir / "gt" / "gt.txt"};
+    gt << "1,1,100.0,150.0,30.0,25.0,1,-1,-1,-1\n"
+       << "2,1,106.0,150.0,30.0,25.0,1,-1,-1,-1\n"
+       << "3,1,112.0,150.0,30.0,25.0,1,-1,-1,-1\n"
+       << "4,1,118.0,150.0,30.0,25.0,1,-1,-1,-1\n";
+  }
+
+  uav::MotSequenceFrameSource source{temp_dir};
+  uav::MotReplayDetector detector{temp_dir};
+  uav::KalmanIoUTracker tracker{};
+  RecordingMetricsSink sink{};
+
+  uav::TrackingPipeline pipeline{source, detector, tracker, sink};
+  const auto summary = pipeline.run();
+
+  require(summary.frames_processed == 4U, "4 MOT frames processed");
+  require(summary.detections_produced == 4U, "4 MOT detections replayed");
+  require(summary.tracks_produced == 4U, "4 tracks produced");
+  require(sink.frame_ids.size() == 4U, "4 frame metrics recorded");
+
+  std::filesystem::remove_all(temp_dir);
+}
+
+void test_opencv_frame_source_missing_file() {
+  require_invalid_argument(
+      [] {
+        uav::OpenCvFrameSource src{"non_existent_video_12345.mp4"};
+      },
+      "video file not found");
+}
+
 }  // namespace
 
 int main() {
@@ -166,6 +328,13 @@ int main() {
       std::pair{"CLI options", test_cli_options},
       std::pair{"timestamp order", test_timestamp_order},
       std::pair{"pipeline summary", test_pipeline_summary},
+      std::pair{"Kalman fast motion & velocity",
+                test_kalman_fast_motion_and_velocity},
+      std::pair{"Kalman occlusion recovery & removal",
+                test_kalman_occlusion_recovery_and_removal},
+      std::pair{"MOT replay end-to-end", test_mot_replay_end_to_end},
+      std::pair{"OpenCvFrameSource error handling",
+                test_opencv_frame_source_missing_file},
   };
 
   std::size_t failures = 0;

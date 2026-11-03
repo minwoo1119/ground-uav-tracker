@@ -1,5 +1,8 @@
 #include "uav/core/cli.hpp"
 #include "uav/core/pipeline.hpp"
+#include "uav/detection/mot_replay_detector.hpp"
+#include "uav/tracking/kalman_iou_tracker.hpp"
+#include "uav/video/mot_sequence_source.hpp"
 
 #include <array>
 #include <filesystem>
@@ -52,8 +55,12 @@ class EmptyTracker final : public uav::ITracker {
 
 class CountingMetricsSink final : public uav::IMetricsSink {
  public:
-  void write(const uav::FrameMetrics&) override { ++writes; }
+  void write(const uav::FrameMetrics& metrics) override {
+    ++writes;
+    total_processing_us += metrics.processing_time.count();
+  }
   std::size_t writes{};
+  std::int64_t total_processing_us{};
 };
 
 int run_self_check() {
@@ -70,6 +77,24 @@ int run_self_check() {
   std::cout << (ok ? "self-check: OK" : "self-check: FAILED") << '\n'
             << "No detector model or tracker implementation was used.\n";
   return ok ? 0 : 1;
+}
+
+int run_mot_replay(const std::filesystem::path& sequence_dir) {
+  uav::MotSequenceFrameSource source{sequence_dir};
+  uav::MotReplayDetector detector{sequence_dir};
+  uav::KalmanIoUTracker tracker{};
+  CountingMetricsSink metrics_sink;
+
+  uav::TrackingPipeline pipeline{source, detector, tracker, metrics_sink};
+  const auto summary = pipeline.run();
+
+  std::cout << "mot-replay: " << source.info().name << '\n'
+            << "  frames_processed:    " << summary.frames_processed << '\n'
+            << "  detections_produced: " << summary.detections_produced << '\n'
+            << "  tracks_produced:     " << summary.tracks_produced << '\n'
+            << "  total_processing_us: " << metrics_sink.total_processing_us
+            << '\n';
+  return 0;
 }
 
 }  // namespace
@@ -92,6 +117,8 @@ int main(int argc, char* argv[]) {
         return 0;
       case uav::CliAction::self_check:
         return run_self_check();
+      case uav::CliAction::replay_mot:
+        return run_mot_replay(*options.replay_mot_dir);
       case uav::CliAction::run:
         break;
     }
@@ -102,11 +129,14 @@ int main(int argc, char* argv[]) {
       return 2;
     }
     std::cerr
-        << "error: detection, tracking, and video input adapters are not "
-           "implemented; configuration was not executed\n";
+        << "error: live detector inference is not implemented yet; "
+           "use --replay-mot <mot-sequence-dir> to run the tracking pipeline\n";
     return 3;
   } catch (const std::invalid_argument& error) {
     std::cerr << "error: " << error.what() << "\n\n" << uav::cli_usage();
     return 2;
+  } catch (const std::exception& error) {
+    std::cerr << "error: " << error.what() << '\n';
+    return 3;
   }
 }
