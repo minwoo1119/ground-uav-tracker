@@ -2,6 +2,7 @@
 
 #include "uav/detection/detector.hpp"
 #include "uav/telemetry/metrics_sink.hpp"
+#include "uav/telemetry/track_sink.hpp"
 #include "uav/tracking/tracker.hpp"
 #include "uav/video/frame_source.hpp"
 
@@ -26,7 +27,8 @@ class TrackingPipeline {
   TrackingPipeline(IFrameSource& source,
                    IDetector& detector,
                    ITracker& tracker,
-                   IMetricsSink& metrics_sink) noexcept;
+                   IMetricsSink& metrics_sink,
+                   ITrackSink* track_sink = nullptr) noexcept;
   [[nodiscard]] RunSummary run(const RunOptions& options = {});
 
  private:
@@ -34,6 +36,7 @@ class TrackingPipeline {
   IDetector& detector_;
   ITracker& tracker_;
   IMetricsSink& metrics_sink_;
+  ITrackSink* track_sink_{};
   std::optional<Timestamp> last_timestamp_{};
 };
 

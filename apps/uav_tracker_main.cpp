@@ -1,6 +1,7 @@
 #include "uav/core/cli.hpp"
 #include "uav/core/pipeline.hpp"
 #include "uav/detection/mot_replay_detector.hpp"
+#include "uav/telemetry/mot_track_writer.hpp"
 #include "uav/tracking/kalman_iou_tracker.hpp"
 #include "uav/video/mot_sequence_source.hpp"
 
@@ -79,13 +80,28 @@ int run_self_check() {
   return ok ? 0 : 1;
 }
 
-int run_mot_replay(const std::filesystem::path& sequence_dir) {
+int run_mot_replay(
+    const std::filesystem::path& sequence_dir,
+    const std::optional<std::filesystem::path>& output_tracks_path) {
+  if (output_tracks_path.has_value()) {
+    uav::validate_mot_track_output_path(*output_tracks_path, sequence_dir);
+  }
   uav::MotSequenceFrameSource source{sequence_dir};
   uav::MotReplayDetector detector{sequence_dir};
   uav::KalmanIoUTracker tracker{};
   CountingMetricsSink metrics_sink;
+  std::optional<uav::MotTrackWriter> track_writer;
+  if (output_tracks_path.has_value()) {
+    track_writer.emplace(*output_tracks_path);
+  }
 
-  uav::TrackingPipeline pipeline{source, detector, tracker, metrics_sink};
+  uav::TrackingPipeline pipeline{
+      source,
+      detector,
+      tracker,
+      metrics_sink,
+      track_writer.has_value() ? &track_writer.value() : nullptr,
+  };
   const auto summary = pipeline.run();
 
   std::cout << "mot-replay: " << source.info().name << '\n'
@@ -94,6 +110,10 @@ int run_mot_replay(const std::filesystem::path& sequence_dir) {
             << "  tracks_produced:     " << summary.tracks_produced << '\n'
             << "  total_processing_us: " << metrics_sink.total_processing_us
             << '\n';
+  if (track_writer.has_value()) {
+    std::cout << "  tracks_output:       "
+              << track_writer->output_path().string() << '\n';
+  }
   return 0;
 }
 
@@ -118,7 +138,12 @@ int main(int argc, char* argv[]) {
       case uav::CliAction::self_check:
         return run_self_check();
       case uav::CliAction::replay_mot:
-        return run_mot_replay(*options.replay_mot_dir);
+        return run_mot_replay(
+            *options.replay_mot_dir,
+            options.output_tracks_path.has_value()
+                ? std::optional<std::filesystem::path>{
+                      *options.output_tracks_path}
+                : std::nullopt);
       case uav::CliAction::run:
         break;
     }

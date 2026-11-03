@@ -2,6 +2,8 @@
 #include "uav/core/pipeline.hpp"
 #include "uav/core/types.hpp"
 #include "uav/detection/mot_replay_detector.hpp"
+#include "uav/telemetry/mot_track_writer.hpp"
+#include "uav/telemetry/track_sink.hpp"
 #include "uav/tracking/kalman_iou_tracker.hpp"
 #include "uav/video/mot_sequence_source.hpp"
 #include "uav/video/opencv_frame_source.hpp"
@@ -12,6 +14,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <iterator>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -45,6 +48,20 @@ void require_invalid_argument(Callable&& callable,
     return;
   }
   throw TestFailure("expected std::invalid_argument");
+}
+
+template <typename Callable>
+void require_runtime_error(Callable&& callable,
+                           std::string_view expected_message) {
+  try {
+    callable();
+  } catch (const std::runtime_error& error) {
+    require(std::string_view{error.what()}.find(expected_message) !=
+                std::string_view::npos,
+            "error message explains the runtime failure");
+    return;
+  }
+  throw TestFailure("expected std::runtime_error");
 }
 
 class TimestampSource final : public uav::IFrameSource {
@@ -93,6 +110,18 @@ class RecordingMetricsSink final : public uav::IMetricsSink {
   std::vector<uav::FrameId> frame_ids{};
 };
 
+class RecordingTrackSink final : public uav::ITrackSink {
+ public:
+  void write(const uav::Frame& frame,
+             std::span<const uav::Track> tracks) override {
+    frame_ids.push_back(frame.id);
+    track_counts.push_back(tracks.size());
+  }
+
+  std::vector<uav::FrameId> frame_ids{};
+  std::vector<std::size_t> track_counts{};
+};
+
 void test_bounding_boxes() {
   const uav::BoundingBox first{0.0F, 0.0F, 10.0F, 10.0F};
   const uav::BoundingBox second{5.0F, 5.0F, 10.0F, 10.0F};
@@ -125,12 +154,16 @@ void test_cli_options() {
   const std::array replay{
       std::string_view{"--replay-mot"},
       std::string_view{"data/processed/mot/V_DRONE_001"},
+      std::string_view{"--output-tracks"},
+      std::string_view{"results/V_DRONE_001.txt"},
   };
   const auto replay_options = uav::parse_cli(replay);
   require(replay_options.action == uav::CliAction::replay_mot,
           "replay_mot action is parsed");
   require(replay_options.replay_mot_dir == "data/processed/mot/V_DRONE_001",
           "replay_mot_dir is parsed");
+  require(replay_options.output_tracks_path == "results/V_DRONE_001.txt",
+          "output_tracks_path is parsed");
 
   const std::array unknown{std::string_view{"--unknown"}};
   require_invalid_argument(
@@ -146,6 +179,13 @@ void test_cli_options() {
   require_invalid_argument(
       [&] { static_cast<void>(uav::parse_cli(missing_input)); },
       "missing required option: --input");
+  const std::array output_without_replay{
+      std::string_view{"--output-tracks"},
+      std::string_view{"results/tracks.txt"},
+  };
+  require_invalid_argument(
+      [&] { static_cast<void>(uav::parse_cli(output_without_replay)); },
+      "requires --replay-mot");
 }
 
 void test_timestamp_order() {
@@ -165,12 +205,111 @@ void test_pipeline_summary() {
   EmptyDetector detector;
   EmptyTracker tracker;
   RecordingMetricsSink metrics_sink;
-  uav::TrackingPipeline pipeline{source, detector, tracker, metrics_sink};
+  RecordingTrackSink track_sink;
+  uav::TrackingPipeline pipeline{
+      source, detector, tracker, metrics_sink, &track_sink};
   const auto summary = pipeline.run();
   require(summary.frames_processed == 2U, "all ordered frames are processed");
   require(summary.detections_produced == 0U,
           "no synthetic detections are produced");
   require(summary.tracks_produced == 0U, "no synthetic tracks are produced");
+  require(track_sink.frame_ids == std::vector<uav::FrameId>{1, 2},
+          "track sink receives every ordered frame");
+  require(track_sink.track_counts == std::vector<std::size_t>{0, 0},
+          "track sink receives explicit empty track lists");
+}
+
+void test_mot_track_writer() {
+  const auto temp_dir =
+      std::filesystem::temp_directory_path() / "uav_mot_track_writer_test";
+  std::filesystem::remove_all(temp_dir);
+  std::filesystem::create_directories(temp_dir);
+  const auto output_path = temp_dir / "tracks.txt";
+
+  const uav::Frame frame{
+      .id = 7,
+      .captured_at = uav::Timestamp{200'000},
+      .image_size = {.width = 640, .height = 512},
+  };
+  const std::array tracks{
+      uav::Track{
+          .id = 3,
+          .bounds = {.x = 10.25F,
+                     .y = 20.5F,
+                     .width = 30.0F,
+                     .height = 40.75F},
+          .state = uav::TrackState::confirmed,
+      },
+      uav::Track{
+          .id = 4,
+          .bounds = {.x = 50.0F,
+                     .y = 60.0F,
+                     .width = 12.0F,
+                     .height = 14.0F},
+          .state = uav::TrackState::lost,
+          .missed_frames = 1,
+      },
+      uav::Track{
+          .id = 5,
+          .bounds = {.x = 70.0F,
+                     .y = 80.0F,
+                     .width = 10.0F,
+                     .height = 10.0F},
+          .state = uav::TrackState::removed,
+      },
+  };
+
+  {
+    uav::MotTrackWriter writer{output_path};
+    writer.write(frame, tracks);
+    writer.write(
+        uav::Frame{
+            .id = 8,
+            .captured_at = uav::Timestamp{233'333},
+            .image_size = {.width = 640, .height = 512},
+        },
+        {});
+  }
+
+  std::ifstream result{output_path};
+  const std::string contents{std::istreambuf_iterator<char>{result}, {}};
+  require(
+      contents ==
+          "7,3,10.250000,20.500000,30.000000,40.750000,-1,-1,-1,-1\n"
+          "7,4,50.000000,60.000000,12.000000,14.000000,-1,-1,-1,-1\n",
+      "MOT writer records active tracks and skips removed tracks");
+  result.close();
+
+  require_invalid_argument(
+      [&] { uav::MotTrackWriter writer{output_path}; }, "already exists");
+
+  require_runtime_error(
+      [&] {
+        uav::MotTrackWriter writer{temp_dir / "missing" / "tracks.txt"};
+      },
+      "failed to open MOT track output");
+
+  std::filesystem::create_directories(temp_dir / "gt");
+  {
+    std::ofstream sequence_info{temp_dir / "seqinfo.ini"};
+    sequence_info << "[Sequence]\n";
+    std::ofstream ground_truth{temp_dir / "gt" / "gt.txt"};
+    ground_truth << "original labels\n";
+  }
+  require_invalid_argument(
+      [&] {
+        uav::validate_mot_track_output_path(temp_dir / "gt" / "gt.txt",
+                                            temp_dir);
+      },
+      "must not overwrite sequence input");
+  require_invalid_argument(
+      [&] {
+        uav::validate_mot_track_output_path(temp_dir / "seqinfo.ini",
+                                            temp_dir);
+      },
+      "must not overwrite sequence input");
+
+  std::filesystem::remove_all(temp_dir);
 }
 
 void test_kalman_fast_motion_and_velocity() {
@@ -299,14 +438,29 @@ void test_mot_replay_end_to_end() {
   uav::MotReplayDetector detector{temp_dir};
   uav::KalmanIoUTracker tracker{};
   RecordingMetricsSink sink{};
-
-  uav::TrackingPipeline pipeline{source, detector, tracker, sink};
-  const auto summary = pipeline.run();
+  const auto result_path = temp_dir / "tracks.txt";
+  uav::RunSummary summary{};
+  {
+    uav::MotTrackWriter track_writer{result_path};
+    uav::TrackingPipeline pipeline{
+        source, detector, tracker, sink, &track_writer};
+    summary = pipeline.run();
+  }
 
   require(summary.frames_processed == 4U, "4 MOT frames processed");
   require(summary.detections_produced == 4U, "4 MOT detections replayed");
   require(summary.tracks_produced == 4U, "4 tracks produced");
   require(sink.frame_ids.size() == 4U, "4 frame metrics recorded");
+
+  std::ifstream result{result_path};
+  std::size_t result_rows = 0U;
+  for (std::string row; std::getline(result, row);) {
+    if (!row.empty()) {
+      ++result_rows;
+    }
+  }
+  require(result_rows == 4U, "4 MOT track result rows written");
+  result.close();
 
   std::filesystem::remove_all(temp_dir);
 }
@@ -328,6 +482,7 @@ int main() {
       std::pair{"CLI options", test_cli_options},
       std::pair{"timestamp order", test_timestamp_order},
       std::pair{"pipeline summary", test_pipeline_summary},
+      std::pair{"MOT track writer", test_mot_track_writer},
       std::pair{"Kalman fast motion & velocity",
                 test_kalman_fast_motion_and_velocity},
       std::pair{"Kalman occlusion recovery & removal",
