@@ -55,6 +55,12 @@ CliOptions parse_cli(std::span<const std::string_view> arguments) {
       }
       options.replay_mot_dir = require_value(arguments, index, argument);
       options.action = CliAction::replay_mot;
+    } else if (argument == "--output-tracks") {
+      if (options.output_tracks_path.has_value()) {
+        throw std::invalid_argument(
+            "--output-tracks may only be specified once");
+      }
+      options.output_tracks_path = require_value(arguments, index, argument);
     } else {
       throw std::invalid_argument("unknown option: " + std::string{argument});
     }
@@ -62,6 +68,11 @@ CliOptions parse_cli(std::span<const std::string_view> arguments) {
 
   if (options.action == CliAction::replay_mot) {
     return options;
+  }
+
+  if (options.output_tracks_path.has_value()) {
+    throw std::invalid_argument(
+        "--output-tracks requires --replay-mot <mot-sequence-dir>");
   }
 
   if (!options.config_path.has_value()) {
@@ -79,12 +90,15 @@ std::string cli_usage() {
       "  uav-tracker --help\n"
       "  uav-tracker --version\n"
       "  uav-tracker self-check\n"
-      "  uav-tracker --replay-mot <mot-sequence-dir>\n"
+      "  uav-tracker --replay-mot <mot-sequence-dir> "
+      "[--output-tracks <path>]\n"
       "  uav-tracker --config <path> --input <source>\n"
       "\n"
       "Options:\n"
       "  --replay-mot <dir>  Replay a MOT Challenge sequence directory "
       "(seqinfo.ini + gt/gt.txt) through KalmanIoUTracker\n"
+      "  --output-tracks <path>  Write replayed tracks as MOTChallenge "
+      "result rows (requires --replay-mot)\n"
       "  --config <path>     Configuration file path\n"
       "  --input <source>    Video file, device, or stream source\n";
 }

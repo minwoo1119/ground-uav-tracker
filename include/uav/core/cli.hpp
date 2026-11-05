@@ -20,6 +20,7 @@ struct CliOptions {
   std::optional<std::string> config_path{};
   std::optional<std::string> input_source{};
   std::optional<std::string> replay_mot_dir{};
+  std::optional<std::string> output_tracks_path{};
 };
 
 [[nodiscard]] CliOptions parse_cli(std::span<const std::string_view> arguments);

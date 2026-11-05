@@ -25,6 +25,7 @@ add_library(uav_core
   src/core/pipeline.cpp
   src/core/types.cpp
   src/detection/mot_replay_detector.cpp
+  src/telemetry/mot_track_writer.cpp
   src/tracking/kalman_iou_tracker.cpp
   src/video/mot_sequence_source.cpp
   src/video/opencv_frame_source.cpp

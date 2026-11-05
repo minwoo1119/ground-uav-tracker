@@ -8,11 +8,13 @@ namespace uav {
 TrackingPipeline::TrackingPipeline(IFrameSource& source,
                                    IDetector& detector,
                                    ITracker& tracker,
-                                   IMetricsSink& metrics_sink) noexcept
+                                   IMetricsSink& metrics_sink,
+                                   ITrackSink* track_sink) noexcept
     : source_(source),
       detector_(detector),
       tracker_(tracker),
-      metrics_sink_(metrics_sink) {}
+      metrics_sink_(metrics_sink),
+      track_sink_(track_sink) {}
 
 RunSummary TrackingPipeline::run(const RunOptions& options) {
   RunSummary summary{};
@@ -41,6 +43,9 @@ RunSummary TrackingPipeline::run(const RunOptions& options) {
     summary.tracks_produced += tracks.size();
     ++summary.frames_processed;
     last_timestamp_ = frame->captured_at;
+    if (track_sink_ != nullptr) {
+      track_sink_->write(*frame, tracks);
+    }
     metrics_sink_.write(FrameMetrics{
         .frame_id = frame->id,
         .captured_at = frame->captured_at,
