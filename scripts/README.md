@@ -3,8 +3,8 @@
 이 디렉터리는 DroneDetectionThesis(Halmstad University) 등 항공체 관측 데이터셋의 MATLAB `.mat` 라벨을 디코딩하고, 4클래스 기준 마스터 JSON 및 파생 어노테이션(YOLO, MOT Challenge, 데이터 분할, 크기 분포 통계)으로 변환하는 오프라인 파이썬 도구를 제공합니다.
 
 > [!NOTE]
-> **외부 의존성 제로(Zero Dependencies)**
-> 이 도구들은 파이썬 표준 라이브러리(`struct`, `zlib`, `json`, `pathlib`, `zipfile`, `xml.etree.ElementTree`)만을 사용하여 구현되었습니다. MATLAB 소프트웨어나 `scipy`, `pandas`, `openpyxl` 등의 추가 패키지 설치 없이 실행됩니다.
+> **데이터 변환 도구는 외부 의존성 제로(Zero Dependencies)**
+> MCOS 파싱과 데이터 변환 도구는 파이썬 표준 라이브러리만 사용합니다. `evaluate_tracking.py`만 표준 MOT 지표 계산을 위해 별도 가상환경의 TrackEval/NumPy/SciPy를 사용합니다.
 
 ---
 
@@ -30,6 +30,8 @@
 | `convert_dataset.py` | 마스터 JSON 중간 표현 생성, YOLO txt 변환, MOT Challenge 변환, 센서별 계층화 Train/Val/Test 분할, 데이터셋 통계(`analyze`) 생성 파이프라인 |
 | `video_probe.py` | 디코딩 없이 `.mp4` 헤더에서 코덱·해상도·프레임 수·FPS를 읽는 도구 |
 | `test_converter.py` | 모의 MAT5/MP4 버퍼 기반 단위 테스트 + 실제 라벨 파일 회귀 테스트(선택) |
+| `evaluate_tracking.py` | MOT GT와 C++ tracker 결과를 TrackEval HOTA/CLEAR/Identity 지표로 비교 |
+| `test_tracking_evaluation.py` | 완전 일치, 누락, ID switch, 잘못된 MOT 행에 대한 평가 어댑터 테스트 |
 
 ---
 
@@ -58,7 +60,29 @@ python scripts/mcos_parser.py data/raw/Video_V/V_DRONE_001_LABELS.mat
 python scripts/mcos_parser.py data/raw/Video_V/V_DRONE_001_LABELS.mat --json
 ```
 
-### 3.3 전체 파이프라인 일괄 실행 (`all`)
+### 3.3 추적 결과 정량 평가
+
+평가 의존성은 데이터 변환 환경과 분리합니다. TrackEval 1.3.0은 MIT 라이선스이며 HOTA, CLEAR(MOTA/MOTP/IDSW/Frag), Identity(IDF1/IDP/IDR) 공식 구현을 제공합니다.
+
+```powershell
+uv venv .venv-eval --python 3.12
+uv pip install --python .venv-eval\Scripts\python.exe -r requirements\evaluation.txt
+
+.\.venv-eval\Scripts\python.exe scripts\test_tracking_evaluation.py -v
+
+.\.venv-eval\Scripts\python.exe scripts\evaluate_tracking.py `
+  --sequence-dir data\processed_sample\mot\V_DRONE_001 `
+  --tracks build-evaluation\V_DRONE_001-tracks.txt
+```
+
+Linux에서는 `.venv-eval/bin/python`을 사용합니다. 결과는 JSON으로 stdout에 출력되며 입력 파일은 수정하지 않습니다. `--iou-threshold`는 CLEAR와 Identity 매칭에만 적용되고 기본값은 TrackEval 기본값과 같은 `0.5`입니다. HOTA는 자체 임계값 범위 전체를 평가합니다.
+
+> [!WARNING]
+> 원본 `.mat` 라벨에는 객체 ID가 없습니다. MOT GT의 ID는 변환기에서 IoU 연결로 파생한 값이므로 IDF1, IDSW, AssA는 **파생 ID 기준 tracking-only 진단값**입니다. 또한 tracker 입력 자체가 GT detection이므로 이 결과를 실제 검출 모델의 end-to-end 성능으로 표현하면 안 됩니다.
+>
+> 현재 변환기는 클래스별로 track ID를 부여하지만 MOT 출력에는 class ID를 보존하지 않습니다. 서로 다른 클래스가 같은 프레임에서 동일한 ID를 가지는 혼합 클래스 시퀀스는 평가기가 중복 `(frame, track_id)`로 거부합니다. 해당 경우에는 MOT exporter의 전역 ID 정책을 별도 Issue에서 먼저 수정해야 합니다.
+
+### 3.4 전체 파이프라인 일괄 실행 (`all`)
 
 라벨 디렉터리로부터 마스터 JSON, 계층화 분할, YOLO 라벨, MOT 시퀀스, 통계 리포트를 한 번에 생성합니다.
 
@@ -91,7 +115,7 @@ data/processed/
             └── gt.txt        # <frame>,<id>,<x>,<y>,<w>,<h>,1,-1,-1,-1
 ```
 
-### 3.4 세부 단계별 실행
+### 3.5 세부 단계별 실행
 
 #### A. 마스터 JSON 생성 (`build-master`)
 ```sh
