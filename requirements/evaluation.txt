@@ -1,0 +1,3 @@
+# Standard MOT metrics (HOTA, CLEAR/MOTA, Identity/IDF1).
+# TrackEval is MIT-licensed: https://github.com/JonathonLuiten/TrackEval
+trackeval==1.3.0
