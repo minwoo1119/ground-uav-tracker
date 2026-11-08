@@ -182,14 +182,16 @@ class MasterDatasetBuilder:
         """Assign track IDs to bboxes (using simple greedy IoU association).
 
         The source labels carry no identities, so these IDs are derived:
-        per class, each previous track greedily takes the current box with the
-        highest IoU (> 0.05). A frame without boxes of a class ends all its
-        tracks, so a one-frame label gap starts new IDs.
+        Within each class, each previous track greedily takes the current box
+        with the highest IoU (> 0.05). IDs are allocated from one sequence-wide
+        namespace so different classes cannot collide in MOT output. A frame
+        without boxes of a class ends all its tracks, so a one-frame label gap
+        starts new IDs.
         """
         active_tracks: Dict[str, Dict[int, Tuple[float, float, float, float]]] = {
             cls: {} for cls in CLASS_TO_ID
         }
-        next_track_id: Dict[str, int] = {cls: 1 for cls in CLASS_TO_ID}
+        next_track_id = 1
         frames_out: List[Dict[str, Any]] = []
 
         for frame in seq.frames:
@@ -204,59 +206,45 @@ class MasterDatasetBuilder:
                 cls_id = CLASS_TO_ID[cls_name]
                 new_active: Dict[int, Tuple[float, float, float, float]] = {}
 
-                # If single target sequence, always use track ID 1
-                if len(boxes) == 1 and not active_tracks[cls_name]:
-                    tid = next_track_id[cls_name]
-                    b_tuple = boxes[0].to_tuple()
-                    new_active[tid] = b_tuple
-                    frame_anns.append(
-                        {
-                            "class_id": cls_id,
-                            "class_name": cls_name,
-                            "track_id": tid,
-                            "bbox_xywh": list(b_tuple),
-                        }
-                    )
-                else:
-                    # Match with active tracks via IoU
-                    unmatched_boxes = [b.to_tuple() for b in boxes]
-                    prev_tracks = list(active_tracks[cls_name].items())
+                # Match only with active tracks of the same class via IoU.
+                unmatched_boxes = [b.to_tuple() for b in boxes]
+                prev_tracks = list(active_tracks[cls_name].items())
 
-                    for tid, prev_box in prev_tracks:
-                        if not unmatched_boxes:
-                            break
-                        best_iou = 0.0
-                        best_idx = -1
-                        for i, cur_box in enumerate(unmatched_boxes):
-                            iou = calculate_iou(prev_box, cur_box)
-                            if iou > best_iou:
-                                best_iou = iou
-                                best_idx = i
-                        if best_iou > 0.05 and best_idx >= 0:
-                            matched_box = unmatched_boxes.pop(best_idx)
-                            new_active[tid] = matched_box
-                            frame_anns.append(
-                                {
-                                    "class_id": cls_id,
-                                    "class_name": cls_name,
-                                    "track_id": tid,
-                                    "bbox_xywh": list(matched_box),
-                                }
-                            )
-
-                    # Any remaining boxes get fresh track IDs
-                    for leftover_box in unmatched_boxes:
-                        tid = next_track_id[cls_name]
-                        next_track_id[cls_name] += 1
-                        new_active[tid] = leftover_box
+                for tid, prev_box in prev_tracks:
+                    if not unmatched_boxes:
+                        break
+                    best_iou = 0.0
+                    best_idx = -1
+                    for i, cur_box in enumerate(unmatched_boxes):
+                        iou = calculate_iou(prev_box, cur_box)
+                        if iou > best_iou:
+                            best_iou = iou
+                            best_idx = i
+                    if best_iou > 0.05 and best_idx >= 0:
+                        matched_box = unmatched_boxes.pop(best_idx)
+                        new_active[tid] = matched_box
                         frame_anns.append(
                             {
                                 "class_id": cls_id,
                                 "class_name": cls_name,
                                 "track_id": tid,
-                                "bbox_xywh": list(leftover_box),
+                                "bbox_xywh": list(matched_box),
                             }
                         )
+
+                # Any remaining boxes get fresh sequence-wide track IDs.
+                for leftover_box in unmatched_boxes:
+                    tid = next_track_id
+                    next_track_id += 1
+                    new_active[tid] = leftover_box
+                    frame_anns.append(
+                        {
+                            "class_id": cls_id,
+                            "class_name": cls_name,
+                            "track_id": tid,
+                            "bbox_xywh": list(leftover_box),
+                        }
+                    )
 
                 active_tracks[cls_name] = new_active
 
