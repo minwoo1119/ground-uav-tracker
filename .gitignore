@@ -3,6 +3,7 @@
 /out/
 /.vs/
 /.vscode/
+/.venv*/
 CMakeUserPresets.json
 
 # Local configuration and generated runtime artifacts
