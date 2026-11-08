@@ -336,6 +336,63 @@ class TestDatasetConversionPipeline(unittest.TestCase):
         self.assertIn("name=V_DRONE_001", ini_text)
         self.assertIn("seqLength=2", ini_text)
 
+    def test_mixed_classes_use_sequence_wide_track_ids(self) -> None:
+        mixed_dir = self.base_path / "mixed"
+        mixed_dir.mkdir()
+        mixed_mat = build_synthetic_mat(
+            [
+                (
+                    [],
+                    [(200.0, 200.0, 30.0, 30.0)],
+                    [(100.0, 100.0, 50.0, 50.0)],
+                    [],
+                ),
+                (
+                    [],
+                    [(205.0, 205.0, 30.0, 30.0)],
+                    [(105.0, 102.0, 50.0, 50.0)],
+                    [],
+                ),
+                ([], [], [(110.0, 104.0, 50.0, 50.0)], []),
+                (
+                    [],
+                    [(210.0, 210.0, 30.0, 30.0)],
+                    [(115.0, 106.0, 50.0, 50.0)],
+                    [],
+                ),
+            ]
+        )
+        (mixed_dir / "V_DRONE_002_LABELS.mat").write_bytes(mixed_mat)
+
+        master = MasterDatasetBuilder(labels_dir=mixed_dir).build()
+        frames = master["sequences"]["V_DRONE_002"]["frames"]
+
+        first_ids = {
+            ann["class_name"]: ann["track_id"] for ann in frames[0]["annotations"]
+        }
+        second_ids = {
+            ann["class_name"]: ann["track_id"] for ann in frames[1]["annotations"]
+        }
+        self.assertEqual(set(first_ids), {"BIRD", "DRONE"})
+        self.assertEqual(len(set(first_ids.values())), 2)
+        self.assertEqual(second_ids, first_ids)
+
+        fourth_ids = {
+            ann["class_name"]: ann["track_id"] for ann in frames[3]["annotations"]
+        }
+        self.assertEqual(fourth_ids["DRONE"], first_ids["DRONE"])
+        self.assertNotIn(fourth_ids["BIRD"], first_ids.values())
+
+        mot_out = self.base_path / "mixed_mot"
+        MotExporter(output_dir=mot_out).export(master)
+        gt_file = mot_out / "V_DRONE_002" / "gt" / "gt.txt"
+        rows = [
+            line.split(",")
+            for line in gt_file.read_text(encoding="utf-8").splitlines()
+        ]
+        frame_track_pairs = [(row[0], row[1]) for row in rows]
+        self.assertEqual(len(frame_track_pairs), len(set(frame_track_pairs)))
+
     def test_split_generator(self) -> None:
         # Build master with 10 dummy sequences
         master = {
