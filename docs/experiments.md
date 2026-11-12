@@ -63,3 +63,13 @@
 | `IR_BIRD_001` | 384 | 394 | 0.7587 | 0.9714 | 0.7481 | 1 | 0 | 10 |
 
 해석 제한: tracker는 실제 detector 출력이 아니라 GT box를 입력받았습니다. GT ID도 원본 제공값이 아니라 변환기의 탐욕적 IoU 연결로 파생됐습니다. 따라서 이 표는 평가 파이프라인과 연관 로직의 회귀 기준선이며 모델 정확도나 배포 성능 비교표가 아닙니다.
+
+## 2026-11-12 YOLOX-s CPU·ONNX 구조 검증
+
+- 목적: 승인된 4클래스 YOLOX-s 640 baseline의 데이터·가중치·export 경로 검증
+- 환경: Windows, Python 3.12.15, PyTorch 2.9.1+cpu, CUDA 없음
+- 데이터: RGB 285개, 이미지 89,233장, annotation 96,245개
+- 사전학습 가중치: 공식 `yolox_s.pth`의 호환 계층 로드(80클래스 분류 head 제외)
+- CPU smoke: 64×64 forward/backward 1회 통과, 구조 검증용 미학습 checkpoint
+- ONNX: opset 18, 입력 `[1,3,640,640]`, 출력 `[1,8400,9]`, ONNX checker 및 Runtime CPU 추론 통과
+- 성능 수치: 기록하지 않음. CUDA 전체 학습과 AP/Recall 평가는 미실행
