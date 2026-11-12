@@ -834,25 +834,19 @@ Issue를 완료했다고 판단하려면 다음 조건을 확인한다.
 
 ---
 
-## 17. Immediate Next Phase — Dataset Preparation
+## 17. Immediate Next Phase — Detector Baseline Decision
 
-현재 프로젝트의 다음 개발 단계는 데이터셋 준비 및 라벨 검증이다.
+데이터셋 분석·변환·분할, Kalman+IoU 추적, MOT 출력과 TrackEval 연결까지 완료했다. 현재 다음 단계는 실제 검출 모델의 라이선스와 학습·Jetson 배포 경로를 결정하는 것이다.
 
-다음 작업을 순서대로 추진한다.
+1. [검출 모델 후보와 Jetson 배포 전략](docs/detector-model-strategy.md) 검토
+2. 모델 계열·크기와 프로젝트 라이선스 영향 승인
+3. 640 full-frame 첫 baseline 및 COCO exporter 범위 승인
+4. 승인된 학습 패키지와 사전학습 가중치의 출처·버전 고정
+5. 학습 pipeline과 detection 평가 구현
+6. ONNX 출력 검증 후 Jetson 대상 TensorRT C++ adapter 구현
+7. 실제 측정 후 1280 full-frame과 overlap tiling 비교
 
-1. 데이터셋 파일 및 디렉터리 구조 조사
-2. 영상 및 라벨 형식 확인
-3. 클래스 및 Bounding Box 분포 분석
-4. 라벨 변환 도구 구현
-5. 변환 결과 시각화 및 검증
-6. 영상 단위 데이터 분할 계획 수립
-7. 학습 데이터셋 구성 및 검증
-
-이 단계에서는 사용자 승인 없이 본격적인 모델 학습을 시작하지 않는다.
-
-각 작업은 별도의 Issue 또는 명확하게 정의된 작업 단위로 관리한다.
-
-데이터셋 품질과 분포를 확인한 후 모델 학습 단계로 진행한다.
+사용자 승인 전에는 모델 다운로드, 외부 패키지 설치, 학습, 가중치 취득 또는 TensorRT engine 생성을 수행하지 않는다.
 
 ---
 
