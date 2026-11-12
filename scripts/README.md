@@ -32,6 +32,12 @@
 | `test_converter.py` | 모의 MAT5/MP4 버퍼 기반 단위 테스트 + 실제 라벨 파일 회귀 테스트(선택) |
 | `evaluate_tracking.py` | MOT GT와 C++ tracker 결과를 TrackEval HOTA/CLEAR/Identity 지표로 비교 |
 | `test_tracking_evaluation.py` | 완전 일치, 누락, ID switch, 잘못된 MOT 행에 대한 평가 어댑터 테스트 |
+| `download_rgb_videos.py` | 고정된 공식 commit에서 RGB MP4 285개를 받아 크기와 Git blob SHA-1 검증 |
+| `export_coco.py` | 마스터 JSON·split·실제 MP4를 검증하고 YOLOX용 COCO 이미지/annotation 생성 |
+| `train_yolox.py` | CUDA Windows 호스트에서 4클래스 YOLOX-s 학습 실행 |
+| `evaluate_yolox.py` | 학습 checkpoint를 val/test COCO AP·클래스별 AP/AR로 평가 |
+| `yolox_smoke.py` | CPU에서 모델·사전학습 가중치 호환성과 forward/backward 한 단계 검증 |
+| `export_yolox_onnx.py` | checkpoint를 정적 640 ONNX로 변환하고 checker·ONNX Runtime 검증 |
 
 ---
 
@@ -47,6 +53,12 @@ UAV_DATASET_LABELS_DIR=data/raw/Video_V python scripts/test_converter.py -v
 ```
 
 환경 변수가 없거나 해당 파일이 없으면 실제 파일 테스트는 skip된다. 검증 환경은 Python 3.14(`uv run python`)이며 다른 버전은 미확인이다.
+
+YOLOX baseline의 Python 3.12 환경 구성, 전체 데이터 변환, 학습 및 ONNX 명령은 [YOLOX-s 640 Windows baseline](../docs/yolox-windows-baseline.md)을 참고합니다. COCO exporter와 다운로더의 의존성 없는 단위 테스트는 다음과 같이 실행합니다.
+
+```powershell
+python -m unittest scripts/test_coco_export.py scripts/test_rgb_download.py -v
+```
 
 ### 3.2 개별 `.mat` 라벨 파일 검사
 
