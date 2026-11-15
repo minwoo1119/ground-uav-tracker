@@ -1,17 +1,17 @@
 # 검출 모델 후보와 Jetson 배포 전략
 
 > 조사 기준일: 2026-11-12  
-> 상태: **추천안 작성 완료 / 사용자 승인 대기(TBD)**
+> 상태: **YOLOX-s 4클래스 640 full-frame 승인 및 baseline 도구 구현 완료**
 
-이 문서는 실제 모델을 다운로드하거나 성능을 측정한 결과가 아니다. 공식 저장소와 공식 문서에서 확인한 라이선스·배포 경로를 현재 데이터와 런타임 경계에 대입한 사전 의사결정 자료다. 모델 계열, 크기, 입력 방식과 외부 패키지 설치는 사용자 승인 전까지 확정하지 않는다.
+이 문서는 후보 선정 당시 공식 저장소와 공식 문서에서 확인한 라이선스·배포 경로를 정리한 의사결정 자료다. 이후 Issue #19에서 YOLOX-s 4클래스 640 full-frame과 외부 학습 환경이 승인되었다. 실제 CUDA 학습 성능과 Jetson 배포 성능은 아직 측정되지 않았다.
 
 ## 1. 현재 프로젝트 조건
 
 - 학습 클래스는 `AIRPLANE`, `BIRD`, `DRONE`, `HELICOPTER` 4개로 확정됐다.
 - RGB 원본 285개 시퀀스는 `640x512`이며, 96,245개 BBox 중 54.78%가 COCO Small이다.
 - DRONE BBox의 61.85%, BIRD BBox의 80.83%가 면적 `32x32 px` 미만이다.
-- 변환기는 현재 YOLO 라벨과 MOT 라벨을 생성하지만 COCO JSON은 생성하지 않는다.
-- C++ 런타임은 `Frame -> IDetector -> Detection[] -> ITracker` 경계를 이미 갖지만 실제 픽셀 버퍼와 TensorRT adapter는 미구현이다.
+- 변환기는 YOLO/MOT 라벨과 실제 frame을 포함한 COCO train/val/test를 생성한다.
+- C++ 런타임은 `Frame -> IDetector -> Detection[] -> ITracker` 경계와 YOLOX raw tensor 후처리를 갖지만 실제 픽셀 버퍼와 model runtime adapter는 미구현이다.
 - 저장소는 공개 상태지만 프로젝트 자체 `LICENSE` 파일은 아직 없다. 공개 저장소라는 사실만으로 재사용 권한이나 AGPL 호환성이 자동 결정되지는 않는다.
 
 ## 2. 비교 기준
@@ -107,29 +107,29 @@ ONNX를 교환 산출물로 두고 TensorRT engine은 대상 Jetson에서 생성
 
 ## 7. 첫 baseline 실험 계획
 
-모델 승인 후 별도 Issue에서 다음 순서로 구현한다.
+승인 당시 계획과 현재 진척은 다음과 같다.
 
-1. RGB split을 그대로 사용하는 COCO exporter와 schema 검증 추가
-2. 선택 모델의 버전·라이선스·사전학습 가중치 출처를 lock file/실험 기록에 고정
-3. `640 letterbox`, 4클래스, 고정 seed로 한 번의 smoke training 수행
-4. 학습 중단/재개, 잘못된 dataset path와 class mapping 오류 검증
-5. validation에서 class-wise Precision/Recall/mAP, Small-object recall, Drone/Bird confusion 기록
-6. ONNX export 후 PyTorch와 출력 shape·좌표 복원·NMS 결과 비교
-7. Jetson에서 FP16 engine을 생성하고 batch 1 latency/FPS/memory 측정
-8. 기준선이 재현된 뒤에만 1280과 tiling 실험 분리
+1. [x] RGB split을 그대로 사용하는 COCO exporter와 schema 검증 추가
+2. [x] 선택 모델의 버전·라이선스·사전학습 가중치 출처를 requirements/실험 기록에 고정
+3. [x] `640 letterbox`, 4클래스, 고정 seed의 CPU 구조 smoke 수행
+4. [x] 잘못된 dataset path와 class mapping, CUDA 부재 오류 검증
+5. [ ] CUDA 학습 후 validation에서 class-wise Precision/Recall/mAP, Small-object recall, Drone/Bird confusion 기록
+6. [x] ONNX 출력 shape와 C++ 좌표 복원·NMS 계약 검증
+7. [ ] Jetson에서 FP16 engine을 생성하고 batch 1 latency/FPS/memory 측정
+8. [ ] 기준선이 재현된 뒤 1280과 tiling 실험 분리
 
-Epoch, batch size, augmentation, 합격 기준과 JetPack/TensorRT 버전은 장비와 모델 승인 후 결정한다. 이 문서에서는 임의의 성능 목표를 정하지 않는다.
+첫 재현 설정은 50 epoch, batch size 8 기본값으로 문서화했지만 최적값으로 확정한 것은 아니다. augmentation 비교, 합격 기준과 JetPack/TensorRT 버전은 여전히 실제 장비 측정과 사용자 결정이 필요하다. 이 문서에서는 임의의 성능 목표를 정하지 않는다.
 
-## 8. 사용자 승인 요청
+## 8. 승인 결과와 남은 결정
 
-다음 구현으로 넘어가려면 아래 결정을 승인해야 한다.
+아래 1~3은 Issue #19에서 승인되어 구현되었고, 4는 여전히 별도 사용자 결정 사항이다.
 
 1. **기본 추천:** YOLOX-s, Apache-2.0 코드, 640 full-frame baseline
 2. **데이터 확장:** 기존 split을 보존하는 COCO exporter 추가
 3. **외부 리소스:** 승인된 버전의 학습 패키지 설치와 사전학습 가중치 취득
 4. **저장소 라이선스:** 프로젝트 자체 LICENSE를 별도 Issue에서 선택할지 여부
 
-승인 전에는 모델 다운로드, 패키지 설치, 학습, ONNX/TensorRT 산출물 생성을 수행하지 않는다.
+CUDA 전체 학습, 실제 threshold 선택과 성능 기준은 측정 환경에서 검증해야 한다. TensorRT engine과 Jetson 배포 버전은 별도 승인·검증 전까지 생성하거나 성능을 주장하지 않는다.
 
 ## 9. 공식 출처
 
