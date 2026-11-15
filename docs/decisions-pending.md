@@ -10,14 +10,15 @@
 | 데이터 정책 및 변환 | **DroneDetectionThesis (RGB 285개 우선)** + 자체 순수 Python MCOS 파서 + **마스터 JSON 기반 다중 변환(YOLO/MOT) 및 센서(`V`/`IR`) 분리 계층화 분할(70/15/15)** | [데이터셋 검토 보고서](datasets/DATASET_REVIEW.md), `scripts/` 파이프라인 구현 완료 |
 | 비디오 처리 외부 라이브러리 | **OpenCV 도입 승인** (선택적 CMake 옵션으로 구성하여 미설치 환경에서도 코어/단위 테스트 빌드 유지) | `OpenCvFrameSource`로 구현 완료 |
 | 추적 방식 | **Kalman Filter + IoU 매칭** 기반 추적기(`ITracker` 구현체) | `KalmanIoUTracker`로 구현 완료 |
+| 첫 검출 baseline | **YOLOX-s, 4클래스, 640×640 full-frame** | Issue #19에서 사용자 승인. `training/yolox_s_uav.py`와 Windows 학습·ONNX 검증 도구에 반영 |
+| 검출 학습 초기화 | **공식 YOLOX-s COCO 사전학습 가중치 사용** | YOLOX `0.1.1rc0` release의 `yolox_s.pth`; 80클래스 분류 head는 제외하고 호환 계층만 로드 |
 
 ## 2. 미결정 사항 (TBD)
 
 | 결정 항목 | 주요 선택지 | 영향 |
 |---|---|---|
-| 검출 모델과 크기 | [후보 비교 문서](detector-model-strategy.md)의 기본 추천 `YOLOX-s + 640` vs `RT-DETRv2-S` vs AGPL/Enterprise 조건의 Ultralytics YOLO | 라이선스, 소형 객체(61.85%가 `<32x32` px) Recall, 지연시간, TensorRT 호환성. **추천안만 있으며 승인 전까지 TBD** |
 | 입력 환경 세부 사양 | 실시간 카메라 모델, 화각, 해상도, RTSP 사용 여부 | 비디오 어댑터, 지연, 배포 의존성 |
-| 프레임 처리 | `640 full-frame -> 1280 full-frame -> overlap tiling` 단계 실험안 | 소형 객체 recall, 처리량, 복잡도. 첫 640 baseline도 사용자 승인 전까지 TBD |
+| 후속 프레임 처리 | `1280 full-frame` vs `overlap tiling` | 첫 baseline은 640 full-frame으로 확정. 후속 방식은 실제 recall·처리량 측정 뒤 결정 |
 | Jetson 스택 | JetPack/TensorRT/DeepStream 구체적 고정 버전 | 빌드 이미지, API, 배포 방식 |
 | 성능 기준 | FPS, latency, 정확도와 로그 보존 기준 | 테스트 장비, 합격 기준, 메트릭 스키마 |
 | 출력 연동 | 콘솔, 파일, 네트워크, UI | 결과 스키마와 운영 구조 |

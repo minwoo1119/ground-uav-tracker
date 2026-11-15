@@ -834,19 +834,17 @@ Issue를 완료했다고 판단하려면 다음 조건을 확인한다.
 
 ---
 
-## 17. Immediate Next Phase — Detector Baseline Decision
+## 17. Immediate Next Phase — Detector Baseline Training
 
-데이터셋 분석·변환·분할, Kalman+IoU 추적, MOT 출력과 TrackEval 연결까지 완료했다. 현재 다음 단계는 실제 검출 모델의 라이선스와 학습·Jetson 배포 경로를 결정하는 것이다.
+데이터셋 분석·변환·분할, Kalman+IoU 추적, MOT 출력과 TrackEval 연결을 완료했고, 첫 detector baseline은 **YOLOX-s 4클래스, 640 full-frame**으로 승인됐다. Windows용 COCO 변환·학습 launcher·CPU smoke·ONNX 검증 경로는 [재현 문서](docs/yolox-windows-baseline.md)에 정리돼 있다.
 
-1. [검출 모델 후보와 Jetson 배포 전략](docs/detector-model-strategy.md) 검토
-2. 모델 계열·크기와 프로젝트 라이선스 영향 승인
-3. 640 full-frame 첫 baseline 및 COCO exporter 범위 승인
-4. 승인된 학습 패키지와 사전학습 가중치의 출처·버전 고정
-5. 학습 pipeline과 detection 평가 구현
-6. ONNX 출력 검증 후 Jetson 대상 TensorRT C++ adapter 구현
-7. 실제 측정 후 1280 full-frame과 overlap tiling 비교
+1. CUDA GPU가 있는 Windows 호스트에서 YOLOX-s 전체 학습
+2. test split의 AP, 클래스별 Recall 및 작은 객체 Recall 기록
+3. detector 결과를 C++ tracker 입력과 연결하고 end-to-end 평가
+4. 실제 측정 후 1280 full-frame과 overlap tiling 비교 여부 결정
+5. Jetson 스택 승인 후 TensorRT C++ adapter와 장치 검증
 
-사용자 승인 전에는 모델 다운로드, 외부 패키지 설치, 학습, 가중치 취득 또는 TensorRT engine 생성을 수행하지 않는다.
+현재 개발 PC에는 CUDA GPU가 없어 전체 학습과 정확도 평가는 미검증이다. Jetson/TensorRT engine 생성과 장치 성능 주장은 해당 환경에서 별도 검증하기 전까지 수행하지 않는다.
 
 ---
 
