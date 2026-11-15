@@ -87,5 +87,5 @@ exporter는 ONNX checker와 ONNX Runtime CPU 추론을 실행합니다. 4클래�
 
 ## 검증 경계
 
-- 검증됨: 데이터 다운로드 무결성, 전체 COCO 변환, 4클래스 모델 생성, 공식 가중치의 호환 계층 로드, CPU forward/backward, ONNX export/check/runtime, C++ raw tensor decode/NMS
+- 검증됨: 데이터 다운로드 무결성, 전체 COCO 변환, 4클래스 모델 생성, 공식 가중치의 호환 계층 로드, CPU forward/backward, ONNX export/check/runtime, C++ BGR 전처리·ONNX Runtime CPU inference·raw tensor decode/NMS
 - 미검증: CUDA 학습, AP/Recall, 새 오탐률, 실제 영상 detector→tracker 연결, TensorRT engine, Jetson FPS/latency/power

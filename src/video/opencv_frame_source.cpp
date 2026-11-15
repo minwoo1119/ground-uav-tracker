@@ -1,7 +1,9 @@
 #include "uav/video/opencv_frame_source.hpp"
 
+#include <algorithm>
 #include <stdexcept>
 #include <string>
+#include <utility>
 
 #if defined(UAV_HAS_OPENCV) && UAV_HAS_OPENCV
 #include <opencv2/videoio.hpp>
@@ -50,6 +52,10 @@ std::optional<Frame> OpenCvFrameSource::next() {
   if (!impl_->capture.read(image) || image.empty()) {
     return std::nullopt;
   }
+  if (image.type() != CV_8UC3) {
+    throw std::runtime_error(
+        "OpenCV frame is not an 8-bit three-channel BGR image");
+  }
 
   const FrameId id = impl_->next_id++;
   const auto width = static_cast<std::uint32_t>(image.cols);
@@ -57,10 +63,21 @@ std::optional<Frame> OpenCvFrameSource::next() {
   const auto timestamp_us = static_cast<std::int64_t>(
       static_cast<double>(id - 1U) * 1'000'000.0 / impl_->fps);
 
+  const auto row_stride = static_cast<std::size_t>(width) * 3U;
+  std::vector<std::uint8_t> pixels(
+      row_stride * static_cast<std::size_t>(height));
+  for (std::uint32_t row = 0U; row < height; ++row) {
+    const auto* source = image.ptr<std::uint8_t>(static_cast<int>(row));
+    std::copy_n(source, row_stride, pixels.data() + row * row_stride);
+  }
+
   return Frame{
       .id = id,
       .captured_at = Timestamp{timestamp_us},
       .image_size = ImageSize{.width = width, .height = height},
+      .pixel_format = PixelFormat::bgr8,
+      .row_stride_bytes = row_stride,
+      .pixel_data = std::move(pixels),
   };
 }
 

@@ -840,8 +840,8 @@ Issue를 완료했다고 판단하려면 다음 조건을 확인한다.
 
 1. CUDA GPU가 있는 Windows 호스트에서 YOLOX-s 전체 학습
 2. test split의 AP, 클래스별 Recall 및 작은 객체 Recall 기록
-3. C++ `YoloXPostprocessor` 앞에 Frame pixel buffer와 ONNX Runtime reference adapter 연결
-4. detector 결과를 C++ tracker 입력과 연결하고 end-to-end 평가
+3. CLI/config factory에서 OpenCV source + `OnnxYoloXDetector` + tracker 연결
+4. 학습 model의 detector 결과로 end-to-end 평가
 5. 실제 측정 후 1280 full-frame과 overlap tiling 비교 여부 결정
 6. Jetson 스택 승인 후 TensorRT C++ adapter와 장치 검증
 

@@ -134,9 +134,9 @@ std::vector<Detection> YoloXPostprocessor::process(
         "YOLOX raw output length does not match anchors * features");
   }
 
-  const float scale = std::min(
-      static_cast<float>(config_.input_size.width) / original_size.width,
-      static_cast<float>(config_.input_size.height) / original_size.height);
+  const float scale = static_cast<float>(std::min(
+      static_cast<double>(config_.input_size.width) / original_size.width,
+      static_cast<double>(config_.input_size.height) / original_size.height));
   std::vector<Candidate> candidates;
   std::size_t anchor_index = 0U;
 

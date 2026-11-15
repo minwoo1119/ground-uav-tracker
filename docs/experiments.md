@@ -73,3 +73,14 @@
 - CPU smoke: 64×64 forward/backward 1회 통과, 구조 검증용 미학습 checkpoint
 - ONNX: opset 18, 입력 `[1,3,640,640]`, 출력 `[1,8400,9]`, ONNX checker 및 Runtime CPU 추론 통과
 - 성능 수치: 기록하지 않음. CUDA 전체 학습과 AP/Recall 평가는 미실행
+
+## 2026-11-16 C++ ONNX Runtime CPU 경로 검증
+
+- 목적: Frame pixel → YOLOX 전처리 → ONNX Runtime → C++ 후처리 연결 검증
+- 환경: Windows, MSVC Release, ONNX Runtime CPU 1.23.2, OpenCV 4.11.0
+- model: `untrained_cpu_smoke_checkpoint`에서 export한 local ONNX(Git 제외)
+- synthetic BGR8 frame: inference 및 `[1,8400,9]` output 계약 통과
+- 실제 영상: `V_DRONE_001.mp4` 첫 frame의 OpenCV decode, owned BGR8 copy 및 inference 통과
+- 결과: 두 입력 모두 confidence 0.99에서 detection 0개
+- 해석 제한: 미학습 smoke model의 0 detection은 정확도 결과가 아니며, 경로와 shape 검증만 의미함
+- 미검증: 학습 checkpoint AP/Recall, CPU latency/FPS, CUDA/TensorRT/Jetson

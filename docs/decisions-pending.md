@@ -12,6 +12,7 @@
 | 추적 방식 | **Kalman Filter + IoU 매칭** 기반 추적기(`ITracker` 구현체) | `KalmanIoUTracker`로 구현 완료 |
 | 첫 검출 baseline | **YOLOX-s, 4클래스, 640×640 full-frame** | Issue #19에서 사용자 승인. `training/yolox_s_uav.py`와 Windows 학습·ONNX 검증 도구에 반영 |
 | 검출 학습 초기화 | **공식 YOLOX-s COCO 사전학습 가중치 사용** | YOLOX `0.1.1rc0` release의 `yolox_s.pth`; 80클래스 분류 head는 제외하고 호환 계층만 로드 |
+| Windows reference inference | **CPU-owned BGR8 Frame + ONNX Runtime 1.23.2 CPU adapter** | backend-independent 전처리/후처리 검증용. 기본 CMake 옵션은 OFF이며 Jetson backend 선택을 의미하지 않음 |
 
 ## 2. 미결정 사항 (TBD)
 
