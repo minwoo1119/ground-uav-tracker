@@ -2,6 +2,7 @@
 #include "uav/core/pipeline.hpp"
 #include "uav/core/types.hpp"
 #include "uav/detection/mot_replay_detector.hpp"
+#include "uav/detection/yolox_postprocessor.hpp"
 #include "uav/telemetry/mot_track_writer.hpp"
 #include "uav/telemetry/track_sink.hpp"
 #include "uav/tracking/kalman_iou_tracker.hpp"
@@ -15,6 +16,7 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <limits>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -131,6 +133,155 @@ void test_bounding_boxes() {
   require(std::abs(uav::intersection_over_union(first, second) -
                    (25.0F / 175.0F)) < 0.0001F,
           "IoU is calculated correctly");
+}
+
+uav::YoloXPostprocessorConfig make_yolox_config(
+    bool class_agnostic_nms = true) {
+  return uav::YoloXPostprocessorConfig{
+      .input_size = {.width = 640U, .height = 640U},
+      .strides = {8U, 16U, 32U},
+      .class_names = {"AIRPLANE", "BIRD", "DRONE", "HELICOPTER"},
+      .confidence_threshold = 0.5F,
+      .nms_threshold = 0.45F,
+      .class_agnostic_nms = class_agnostic_nms,
+  };
+}
+
+void set_yolox_anchor(std::vector<float>& output,
+                      std::size_t anchor,
+                      float raw_x,
+                      float raw_y,
+                      float width,
+                      float height,
+                      float stride,
+                      float objectness,
+                      std::size_t class_index,
+                      float class_probability) {
+  constexpr std::size_t features = 9U;
+  const auto offset = anchor * features;
+  output[offset] = raw_x;
+  output[offset + 1U] = raw_y;
+  output[offset + 2U] = std::log(width / stride);
+  output[offset + 3U] = std::log(height / stride);
+  output[offset + 4U] = objectness;
+  output[offset + 5U + class_index] = class_probability;
+}
+
+void test_yolox_decode_and_letterbox_restore() {
+  const uav::YoloXPostprocessor postprocessor{make_yolox_config()};
+  require(postprocessor.expected_anchor_count() == 8400U,
+          "YOLOX-s 640 has 8,400 anchors");
+  require(postprocessor.feature_count() == 9U,
+          "four-class YOLOX output has nine features");
+
+  std::vector<float> output(postprocessor.expected_anchor_count() *
+                            postprocessor.feature_count());
+  set_yolox_anchor(output, 0U, 12.5F, 6.25F, 100.0F, 50.0F, 8.0F,
+                   0.8F, 2U, 0.75F);
+  set_yolox_anchor(output, 6400U, 20.0F, 20.0F, 64.0F, 32.0F, 16.0F,
+                   0.7F, 0U, 0.8F);
+  set_yolox_anchor(output, 8000U, 15.0F, 3.0F, 64.0F, 64.0F, 32.0F,
+                   0.6875F, 1U, 0.8F);
+  const auto detections =
+      postprocessor.process(output, {.width = 1280U, .height = 720U});
+
+  require(detections.size() == 3U,
+          "stride 8, 16, and 32 YOLOX candidates pass threshold");
+  const auto& detection = detections.front();
+  require(detection.class_id == 2 && detection.class_name == "DRONE",
+          "YOLOX class ID and name mapping are preserved");
+  require(std::abs(detection.confidence - 0.6F) < 0.0001F,
+          "YOLOX confidence is objectness times class probability");
+  require(std::abs(detection.bounds.x - 100.0F) < 0.001F &&
+              std::abs(detection.bounds.y - 50.0F) < 0.001F &&
+              std::abs(detection.bounds.width - 200.0F) < 0.001F &&
+              std::abs(detection.bounds.height - 100.0F) < 0.001F,
+          "top-left letterbox scale is restored to original coordinates");
+  require(detections[1].class_id == 0 &&
+              std::abs(detections[1].bounds.width - 128.0F) < 0.001F &&
+              std::abs(detections[1].bounds.height - 64.0F) < 0.001F,
+          "stride-16 anchor is decoded with its own grid scale");
+  require(detections[2].class_id == 1 &&
+              std::abs(detections[2].bounds.x - 896.0F) < 0.001F,
+          "stride-32 anchor follows the concatenated YOLOX level order");
+}
+
+void test_yolox_clipping_and_nms_modes() {
+  auto class_agnostic_config = make_yolox_config(true);
+  class_agnostic_config.confidence_threshold = 0.2F;
+  const uav::YoloXPostprocessor class_agnostic{class_agnostic_config};
+  std::vector<float> output(class_agnostic.expected_anchor_count() *
+                            class_agnostic.feature_count());
+
+  set_yolox_anchor(output, 0U, 2.0F, 2.0F, 40.0F, 40.0F, 8.0F,
+                   0.9F, 2U, 0.9F);
+  set_yolox_anchor(output, 1U, 1.0F, 2.0F, 40.0F, 40.0F, 8.0F,
+                   0.8F, 1U, 0.9F);
+  const auto suppressed =
+      class_agnostic.process(output, {.width = 640U, .height = 640U});
+  require(suppressed.size() == 1U && suppressed.front().class_id == 2,
+          "class-agnostic NMS keeps the strongest overlapping candidate");
+  require(suppressed.front().bounds.x == 0.0F &&
+              suppressed.front().bounds.y == 0.0F &&
+              suppressed.front().bounds.width == 36.0F &&
+              suppressed.front().bounds.height == 36.0F,
+          "decoded boxes are clipped to original image bounds");
+
+  const uav::YoloXPostprocessor class_aware{make_yolox_config(false)};
+  const auto retained =
+      class_aware.process(output, {.width = 640U, .height = 640U});
+  require(retained.size() == 2U,
+          "class-aware NMS retains overlapping different classes");
+}
+
+void test_yolox_invalid_contracts() {
+  require_invalid_argument(
+      [] {
+        static_cast<void>(
+            uav::YoloXPostprocessor{uav::YoloXPostprocessorConfig{}});
+      },
+      "confidence threshold");
+
+  const uav::YoloXPostprocessor postprocessor{make_yolox_config()};
+  std::vector<float> wrong_size(9U);
+  require_invalid_argument(
+      [&] {
+        static_cast<void>(postprocessor.process(
+            wrong_size, {.width = 640U, .height = 640U}));
+      },
+      "raw output length");
+
+  std::vector<float> non_finite(postprocessor.expected_anchor_count() *
+                                postprocessor.feature_count());
+  non_finite[0] = std::numeric_limits<float>::quiet_NaN();
+  require_invalid_argument(
+      [&] {
+        static_cast<void>(postprocessor.process(
+            non_finite, {.width = 640U, .height = 640U}));
+      },
+      "NaN or Inf");
+
+  std::vector<float> invalid_probability(
+      postprocessor.expected_anchor_count() * postprocessor.feature_count());
+  invalid_probability[4] = 1.1F;
+  require_invalid_argument(
+      [&] {
+        static_cast<void>(postprocessor.process(
+            invalid_probability, {.width = 640U, .height = 640U}));
+      },
+      "objectness");
+
+  std::vector<float> decoded_overflow(
+      postprocessor.expected_anchor_count() * postprocessor.feature_count());
+  decoded_overflow[2] = 1000.0F;
+  decoded_overflow[4] = 1.0F;
+  decoded_overflow[5] = 1.0F;
+  require_invalid_argument(
+      [&] {
+        static_cast<void>(postprocessor.process(
+            decoded_overflow, {.width = 640U, .height = 640U}));
+      },
+      "decoded box");
 }
 
 void test_track_states() {
@@ -478,6 +629,11 @@ void test_opencv_frame_source_missing_file() {
 int main() {
   const std::array tests{
       std::pair{"bounding boxes", test_bounding_boxes},
+      std::pair{"YOLOX decode and letterbox restore",
+                test_yolox_decode_and_letterbox_restore},
+      std::pair{"YOLOX clipping and NMS modes",
+                test_yolox_clipping_and_nms_modes},
+      std::pair{"YOLOX invalid contracts", test_yolox_invalid_contracts},
       std::pair{"track states", test_track_states},
       std::pair{"CLI options", test_cli_options},
       std::pair{"timestamp order", test_timestamp_order},

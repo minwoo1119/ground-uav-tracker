@@ -840,9 +840,10 @@ Issue를 완료했다고 판단하려면 다음 조건을 확인한다.
 
 1. CUDA GPU가 있는 Windows 호스트에서 YOLOX-s 전체 학습
 2. test split의 AP, 클래스별 Recall 및 작은 객체 Recall 기록
-3. detector 결과를 C++ tracker 입력과 연결하고 end-to-end 평가
-4. 실제 측정 후 1280 full-frame과 overlap tiling 비교 여부 결정
-5. Jetson 스택 승인 후 TensorRT C++ adapter와 장치 검증
+3. C++ `YoloXPostprocessor` 앞에 Frame pixel buffer와 ONNX Runtime reference adapter 연결
+4. detector 결과를 C++ tracker 입력과 연결하고 end-to-end 평가
+5. 실제 측정 후 1280 full-frame과 overlap tiling 비교 여부 결정
+6. Jetson 스택 승인 후 TensorRT C++ adapter와 장치 검증
 
 현재 개발 PC에는 CUDA GPU가 없어 전체 학습과 정확도 평가는 미검증이다. Jetson/TensorRT engine 생성과 장치 성능 주장은 해당 환경에서 별도 검증하기 전까지 수행하지 않는다.
 

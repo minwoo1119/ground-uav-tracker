@@ -20,6 +20,13 @@ IFrameSource ---------------------------------> Frame -> IDetector -------------
 
 `TrackingPipeline`은 프레임 순서 검증(단조 증가 timestamp 보장), `detect` → `update` → 선택적 track sink → metrics sink 호출 순서 및 처리 개수/시간 집계를 담당합니다. `ITrackSink`를 전달하지 않으면 기존과 같이 추적 결과 파일을 생성하지 않습니다.
 
+실제 model runtime adapter는 아직 없지만, export된 YOLOX raw tensor 이후 경계는 구현되어 있습니다.
+
+```text
+ONNX Runtime/TensorRT (미구현) -> raw float[8400][9]
+  -> YoloXPostprocessor -> Detection[] -> ITracker
+```
+
 ## 데이터 계약
 
 - `Frame`: `FrameId`, 단조 증가 `Timestamp(microseconds)` 및 `ImageSize`를 포함합니다.
@@ -53,6 +60,12 @@ IFrameSource ---------------------------------> Frame -> IDetector -------------
 - 기존 결과 덮어쓰기를 방지하기 위해 출력 파일이 이미 있으면 거부합니다. 부모 디렉터리도 자동 생성하지 않으며, 열기 또는 쓰기 실패는 예외로 호출자에게 전달합니다.
 - 원본 `seqinfo.ini` 또는 `gt/gt.txt`와 동일한 출력 경로는 입력 데이터 덮어쓰기를 막기 위해 거부합니다.
 
+### 4. YOLOX raw 출력 후처리
+
+- `YoloXPostprocessor`: 640 입력의 stride 8/16/32 raw tensor `[8400, 9]`를 grid decode하고, `objectness × class probability`, 원본 letterbox 좌표 복원, clipping 및 NMS를 거쳐 `Detection[]`을 반환합니다.
+- 공식 demo와 같은 class-agnostic NMS를 기본 설정으로 사용할 수 있고, class-aware NMS도 호출자 설정으로 제공합니다. confidence와 NMS threshold는 호출자가 명시해야 하며 현재 저장소는 최적값을 주장하지 않습니다.
+- tensor shape, class probability 범위, NaN/Inf 및 잘못된 설정은 명시적 예외로 반환합니다. 자세한 계약은 [YOLOX C++ 후처리 문서](yolox-cpp-postprocessing.md)에 기록합니다.
+
 ## 실행 계층 (`apps/uav_tracker_main.cpp`)
 
 - `uav-tracker self-check`: 빈 어댑터로 파이프라인 무결성 자가 진단
@@ -61,4 +74,4 @@ IFrameSource ---------------------------------> Frame -> IDetector -------------
 
 ## 아직 확정하지 않은 설계
 
-공식 MOTA/IDF1 계산, 결과 시각화, 자동 보존/정리 정책, 추론 주기, 멀티스레딩/큐, ROI/tiling, pixel buffer GPU 공유 형식 및 실제 딥러닝 검출기(TensorRT) 연동은 후속 단계에서 결정합니다.
+결과 시각화, 자동 보존/정리 정책, 추론 주기, 멀티스레딩/큐, ROI/tiling, pixel buffer CPU/GPU 공유 형식 및 실제 딥러닝 runtime adapter 연동은 후속 단계에서 결정합니다.

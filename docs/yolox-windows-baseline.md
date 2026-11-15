@@ -83,9 +83,9 @@ Issue #19 구현 시 전체 변환 결과는 train/val/test 순으로 이미지 
   --output artifacts\yolox_s_uav.onnx
 ```
 
-exporter는 ONNX checker와 ONNX Runtime CPU 추론을 실행합니다. 4클래스 raw output의 기대 shape은 `[1, 8400, 9]`입니다. 후처리(NMS)는 ONNX 밖에 있고, TensorRT parser·정밀도·성능은 Jetson 단계에서 별도로 검증해야 합니다.
+exporter는 ONNX checker와 ONNX Runtime CPU 추론을 실행합니다. 4클래스 raw output의 기대 shape은 `[1, 8400, 9]`입니다. graph 밖의 decode와 NMS 계약은 [YOLOX C++ 후처리 문서](yolox-cpp-postprocessing.md)에 구현·기록되어 있습니다. 실제 ONNX Runtime/TensorRT adapter, parser·정밀도·성능은 별도로 검증해야 합니다.
 
 ## 검증 경계
 
-- 검증됨: 데이터 다운로드 무결성, 전체 COCO 변환, 4클래스 모델 생성, 공식 가중치의 호환 계층 로드, CPU forward/backward, ONNX export/check/runtime
+- 검증됨: 데이터 다운로드 무결성, 전체 COCO 변환, 4클래스 모델 생성, 공식 가중치의 호환 계층 로드, CPU forward/backward, ONNX export/check/runtime, C++ raw tensor decode/NMS
 - 미검증: CUDA 학습, AP/Recall, 새 오탐률, 실제 영상 detector→tracker 연결, TensorRT engine, Jetson FPS/latency/power
