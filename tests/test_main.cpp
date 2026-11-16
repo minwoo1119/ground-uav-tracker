@@ -2,6 +2,8 @@
 #include "uav/core/pipeline.hpp"
 #include "uav/core/types.hpp"
 #include "uav/detection/mot_replay_detector.hpp"
+#include "uav/detection/onnx_yolox_detector.hpp"
+#include "uav/detection/yolox_preprocessor.hpp"
 #include "uav/detection/yolox_postprocessor.hpp"
 #include "uav/telemetry/mot_track_writer.hpp"
 #include "uav/telemetry/track_sink.hpp"
@@ -9,6 +11,7 @@
 #include "uav/video/mot_sequence_source.hpp"
 #include "uav/video/opencv_frame_source.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <exception>
@@ -133,6 +136,81 @@ void test_bounding_boxes() {
   require(std::abs(uav::intersection_over_union(first, second) -
                    (25.0F / 175.0F)) < 0.0001F,
           "IoU is calculated correctly");
+}
+
+void test_frame_pixel_contract_and_yolox_preprocessing() {
+  const uav::Frame metadata_only{
+      .id = 1U,
+      .captured_at = uav::Timestamp{0},
+      .image_size = {.width = 2U, .height = 1U},
+  };
+  require(metadata_only.is_valid() && !metadata_only.has_pixels(),
+          "metadata-only frames remain valid");
+
+  const uav::Frame invalid_pixels{
+      .id = 2U,
+      .captured_at = uav::Timestamp{0},
+      .image_size = {.width = 2U, .height = 1U},
+      .pixel_format = uav::PixelFormat::bgr8,
+      .row_stride_bytes = 5U,
+      .pixel_data = std::vector<std::uint8_t>(5U),
+  };
+  require(!invalid_pixels.is_valid(),
+          "BGR8 frames reject a stride smaller than width times three");
+
+  uav::Frame pixels{
+      .id = 3U,
+      .captured_at = uav::Timestamp{0},
+      .image_size = {.width = 2U, .height = 1U},
+      .pixel_format = uav::PixelFormat::bgr8,
+      .row_stride_bytes = 8U,
+      .pixel_data = {10U, 20U, 30U, 10U, 20U, 30U, 99U, 99U},
+  };
+  require(pixels.is_valid() && pixels.has_pixels(),
+          "stride-aware owned BGR8 frame is valid");
+
+  const auto input =
+      uav::preprocess_yolox_bgr(pixels, {.width = 4U, .height = 4U});
+  require(input.tensor.size() == 48U && input.scale == 2.0F &&
+              input.resized_size.width == 4U &&
+              input.resized_size.height == 2U,
+          "YOLOX preprocessing reports CHW tensor and letterbox geometry");
+  require(input.tensor[0U] == 10.0F && input.tensor[16U] == 20.0F &&
+              input.tensor[32U] == 30.0F,
+          "YOLOX preprocessing preserves BGR channel order");
+  require(input.tensor[8U] == 114.0F && input.tensor[24U] == 114.0F &&
+              input.tensor[40U] == 114.0F,
+          "YOLOX preprocessing pads below the top-left image with 114");
+
+  const uav::Frame interpolation_fixture{
+      .id = 4U,
+      .captured_at = uav::Timestamp{0},
+      .image_size = {.width = 2U, .height = 2U},
+      .pixel_format = uav::PixelFormat::bgr8,
+      .row_stride_bytes = 6U,
+      .pixel_data = {
+          0U, 0U, 0U, 100U, 0U, 0U,
+          200U, 0U, 0U, 255U, 0U, 0U,
+      },
+  };
+  const auto interpolated = uav::preprocess_yolox_bgr(
+      interpolation_fixture, {.width = 4U, .height = 4U});
+  const std::array expected_blue{
+      0.0F,   25.0F,  75.0F,  100.0F,
+      50.0F,  72.0F,  117.0F, 139.0F,
+      150.0F, 167.0F, 200.0F, 216.0F,
+      200.0F, 214.0F, 241.0F, 255.0F,
+  };
+  require(std::equal(expected_blue.begin(), expected_blue.end(),
+                     interpolated.tensor.begin()),
+          "bilinear resize matches the pinned OpenCV uint8 fixture");
+
+  require_invalid_argument(
+      [&] {
+        static_cast<void>(uav::preprocess_yolox_bgr(
+            metadata_only, {.width = 4U, .height = 4U}));
+      },
+      "CPU-owned BGR8");
 }
 
 uav::YoloXPostprocessorConfig make_yolox_config(
@@ -282,6 +360,35 @@ void test_yolox_invalid_contracts() {
             decoded_overflow, {.width = 640U, .height = 640U}));
       },
       "decoded box");
+}
+
+void test_onnx_detector_build_contract() {
+  require_invalid_argument(
+      [] {
+        static_cast<void>(uav::OnnxYoloXDetector{
+            uav::OnnxYoloXDetectorConfig{
+                .model_path = "non_existent_model_12345.onnx"}});
+      },
+      "ONNX model file not found");
+#if defined(UAV_HAS_ONNXRUNTIME) && UAV_HAS_ONNXRUNTIME
+  require(uav::OnnxYoloXDetector::is_compiled_with_onnxruntime(),
+          "ONNX-enabled build reports runtime availability");
+#else
+  require(!uav::OnnxYoloXDetector::is_compiled_with_onnxruntime(),
+          "default build reports ONNX Runtime as unavailable");
+  const auto model_path =
+      std::filesystem::temp_directory_path() / "uav_empty_model.onnx";
+  {
+    std::ofstream model{model_path, std::ios::binary};
+    model << "not-an-onnx-model";
+  }
+  uav::OnnxYoloXDetector detector{
+      uav::OnnxYoloXDetectorConfig{.model_path = model_path}};
+  require_runtime_error(
+      [&] { static_cast<void>(detector.detect(uav::Frame{})); },
+      "built without ONNX Runtime support");
+  std::filesystem::remove(model_path);
+#endif
 }
 
 void test_track_states() {
@@ -629,11 +736,15 @@ void test_opencv_frame_source_missing_file() {
 int main() {
   const std::array tests{
       std::pair{"bounding boxes", test_bounding_boxes},
+      std::pair{"Frame pixels and YOLOX preprocessing",
+                test_frame_pixel_contract_and_yolox_preprocessing},
       std::pair{"YOLOX decode and letterbox restore",
                 test_yolox_decode_and_letterbox_restore},
       std::pair{"YOLOX clipping and NMS modes",
                 test_yolox_clipping_and_nms_modes},
       std::pair{"YOLOX invalid contracts", test_yolox_invalid_contracts},
+      std::pair{"ONNX detector build contract",
+                test_onnx_detector_build_contract},
       std::pair{"track states", test_track_states},
       std::pair{"CLI options", test_cli_options},
       std::pair{"timestamp order", test_timestamp_order},

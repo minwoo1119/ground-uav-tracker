@@ -50,4 +50,4 @@ Frame pixel buffer
   -> KalmanIoUTracker
 ```
 
-아직 결정하지 않은 부분은 `Frame` pixel buffer 소유권, BGR/RGB 변환 책임, ONNX Runtime C++ 의존성 취득 방식, 실제 threshold 및 detector 실행 주기입니다. TensorRT/Jetson adapter도 이 postprocessor 계약을 재사용할 수 있지만 대상 장치에서 별도 검증해야 합니다.
+CPU reference 경로는 `Frame` 소유 BGR8 buffer, BGR CHW 전처리와 ONNX Runtime 1.23.2 adapter로 구현되었습니다. 아직 결정하지 않은 부분은 실제 threshold, detector 실행 주기, GPU/zero-copy pixel memory 및 CLI 구성 방식입니다. TensorRT/Jetson adapter도 이 postprocessor 계약을 재사용할 수 있지만 대상 장치에서 별도 검증해야 합니다.
