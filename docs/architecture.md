@@ -78,8 +78,9 @@ OnnxYoloXDetector -> ONNX Runtime CPU -> raw float[8400][9]
 - `uav-tracker self-check`: 빈 어댑터로 파이프라인 무결성 자가 진단
 - `uav-tracker --replay-mot <mot-sequence-dir>`: `MotSequenceFrameSource` + `MotReplayDetector` + `KalmanIoUTracker`를 연결하여 실제 변환된 시퀀스를 End-to-End 리플레이하고 처리 프레임/검출/트랙 수 및 소요 시간을 출력
 - `uav-tracker --replay-mot <mot-sequence-dir> --output-tracks <path>`: 동일한 리플레이 결과를 지정한 MOTChallenge 텍스트 파일에도 기록. 옵션이 없으면 파일을 생성하지 않음
-- `OnnxYoloXDetector`는 아직 CLI/config factory에 연결되지 않았으며 library API와 integration test에서만 실행됩니다.
+- `uav-tracker --config <path> --input <video> [--output-tracks <path>]`: strict runtime config를 읽고 `OpenCvFrameSource` → `OnnxYoloXDetector` → `KalmanIoUTracker` → 선택적 `MotTrackWriter`를 조립합니다. 설정 계약과 실행법은 [runtime config 문서](runtime-config.md)에 기록합니다.
+- `runtime.max_frames=0`이면 영상 끝까지 처리하고 양수이면 구조 검증이나 제한 실행을 위해 해당 프레임 수에서 중단합니다. frame ID와 timestamp는 source에서 pipeline, tracker, sink까지 유지됩니다.
 
 ## 아직 확정하지 않은 설계
 
-결과 시각화, 자동 보존/정리 정책, 추론 주기, 멀티스레딩/큐, ROI/tiling, GPU/zero-copy pixel 형식, CLI detector factory와 TensorRT adapter는 후속 단계에서 결정합니다.
+결과 시각화, 자동 보존/정리 정책, 추론 주기, 멀티스레딩/큐, ROI/tiling, camera/RTSP 입력, GPU/zero-copy pixel 형식과 TensorRT adapter는 후속 단계에서 결정합니다.

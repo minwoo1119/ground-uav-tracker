@@ -1,0 +1,24 @@
+runtime:
+  max_frames: 1
+
+detection:
+  model_path: @UAV_TEST_ONNX_MODEL_CONFIG@
+  input_width: 640
+  input_height: 640
+  strides: [8, 16, 32]
+  class_names: [AIRPLANE, BIRD, DRONE, HELICOPTER]
+  confidence_threshold: 0.99
+  nms_threshold: 0.45
+  class_agnostic_nms: true
+  intra_op_threads: 1
+
+tracking:
+  iou_threshold: 0.20
+  min_hits_to_confirm: 3
+  max_missed_frames: 5
+  default_dt_seconds: 0.033333333
+  position_process_noise: 4.0
+  size_process_noise: 1.0
+  velocity_process_noise: 2500.0
+  position_measurement_noise: 2.0
+  size_measurement_noise: 2.0

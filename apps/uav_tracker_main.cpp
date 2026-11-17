@@ -1,9 +1,12 @@
 #include "uav/core/cli.hpp"
 #include "uav/core/pipeline.hpp"
+#include "uav/core/runtime_config.hpp"
 #include "uav/detection/mot_replay_detector.hpp"
+#include "uav/detection/onnx_yolox_detector.hpp"
 #include "uav/telemetry/mot_track_writer.hpp"
 #include "uav/tracking/kalman_iou_tracker.hpp"
 #include "uav/video/mot_sequence_source.hpp"
+#include "uav/video/opencv_frame_source.hpp"
 
 #include <array>
 #include <filesystem>
@@ -117,6 +120,54 @@ int run_mot_replay(
   return 0;
 }
 
+int run_video_inference(
+    const std::filesystem::path& config_path,
+    const std::filesystem::path& input_path,
+    const std::optional<std::filesystem::path>& output_tracks_path) {
+  const auto config = uav::load_runtime_config(config_path);
+  if (!uav::OpenCvFrameSource::is_compiled_with_opencv()) {
+    throw std::runtime_error(
+        "video inference requires an OpenCV-enabled build "
+        "(UAV_ENABLE_OPENCV=ON)");
+  }
+  if (!uav::OnnxYoloXDetector::is_compiled_with_onnxruntime()) {
+    throw std::runtime_error(
+        "video inference requires an ONNX Runtime-enabled build "
+        "(UAV_ENABLE_ONNXRUNTIME=ON)");
+  }
+
+  uav::OpenCvFrameSource source{input_path};
+  uav::OnnxYoloXDetector detector{config.detector};
+  uav::KalmanIoUTracker tracker{config.tracker};
+  CountingMetricsSink metrics_sink;
+  std::optional<uav::MotTrackWriter> track_writer;
+  if (output_tracks_path.has_value()) {
+    track_writer.emplace(*output_tracks_path);
+  }
+
+  uav::TrackingPipeline pipeline{
+      source,
+      detector,
+      tracker,
+      metrics_sink,
+      track_writer.has_value() ? &track_writer.value() : nullptr,
+  };
+  const auto summary =
+      pipeline.run(uav::RunOptions{.max_frames = config.max_frames});
+
+  std::cout << "video-inference: " << input_path.string() << '\n'
+            << "  frames_processed:    " << summary.frames_processed << '\n'
+            << "  detections_produced: " << summary.detections_produced << '\n'
+            << "  tracks_produced:     " << summary.tracks_produced << '\n'
+            << "  total_processing_us: " << metrics_sink.total_processing_us
+            << '\n';
+  if (track_writer.has_value()) {
+    std::cout << "  tracks_output:       "
+              << track_writer->output_path().string() << '\n';
+  }
+  return 0;
+}
+
 }  // namespace
 
 int main(int argc, char* argv[]) {
@@ -148,15 +199,13 @@ int main(int argc, char* argv[]) {
         break;
     }
 
-    if (!std::filesystem::is_regular_file(*options.config_path)) {
-      std::cerr << "error: configuration file not found: "
-                << *options.config_path << '\n';
-      return 2;
-    }
-    std::cerr
-        << "error: live detector inference is not implemented yet; "
-           "use --replay-mot <mot-sequence-dir> to run the tracking pipeline\n";
-    return 3;
+    return run_video_inference(
+        *options.config_path,
+        *options.input_source,
+        options.output_tracks_path.has_value()
+            ? std::optional<std::filesystem::path>{
+                  *options.output_tracks_path}
+            : std::nullopt);
   } catch (const std::invalid_argument& error) {
     std::cerr << "error: " << error.what() << "\n\n" << uav::cli_usage();
     return 2;
