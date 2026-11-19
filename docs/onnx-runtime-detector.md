@@ -67,13 +67,15 @@ $env:PATH="C:\path\to\opencv\build\x64\vc16\bin;$env:PATH"
 ctest --test-dir build-onnx -C Release --output-on-failure
 ```
 
-Windows build는 `onnxruntime.dll`을 각 executable 디렉터리에 복사합니다. `UAV_TEST_ONNX_MODEL`이 없으면 integration test executable은 빌드하지만 CTest에는 등록하지 않습니다. `UAV_TEST_VIDEO`를 함께 주면 OpenCV가 소유 BGR8 frame을 만들고 같은 detector가 실제 영상 첫 frame을 처리하는 경로도 검사합니다.
+Windows build는 `onnxruntime.dll`을 각 executable 디렉터리에 복사합니다. `UAV_TEST_ONNX_MODEL`이 없으면 integration test executable은 빌드하지만 CTest에는 등록하지 않습니다. `UAV_TEST_VIDEO`를 함께 주면 OpenCV가 소유 BGR8 frame을 만들고 같은 detector가 실제 영상 첫 frame을 처리하는 경로와 `uav-tracker --config ... --input ...` CLI를 함께 검사합니다.
+
+실제 실행 설정과 명령은 [runtime config 문서](runtime-config.md)를 참고합니다.
 
 ## 오류와 미구현 범위
 
 - model 파일 부재, thread 수 오류, input/output count·type·shape 불일치는 명시적으로 거부합니다.
 - pixel 없는 metadata frame이나 잘못된 BGR stride/size는 전처리에서 거부합니다.
 - 기본 OFF build에서 `detect()`를 호출하면 ONNX Runtime 미포함 오류를 반환합니다.
-- 현재 CLI/YAML은 이 adapter를 생성하지 않습니다. 직접 library API로 구성하거나 후속 CLI wiring이 필요합니다.
+- CLI는 strict runtime config를 통해 adapter를 생성합니다. 범용 YAML, camera/RTSP, frame skipping과 비동기 실행은 지원하지 않습니다.
 - local smoke ONNX는 구조 검증용 미학습 model입니다. detection 수가 0이어도 정확도 결과가 아닙니다.
 - CUDA/DirectML/TensorRT provider, batching, asynchronous inference, GPU memory와 Jetson 검증은 포함하지 않습니다.

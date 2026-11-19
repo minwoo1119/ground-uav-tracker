@@ -1,5 +1,6 @@
 #include "uav/core/cli.hpp"
 #include "uav/core/pipeline.hpp"
+#include "uav/core/runtime_config.hpp"
 #include "uav/core/types.hpp"
 #include "uav/detection/mot_replay_detector.hpp"
 #include "uav/detection/onnx_yolox_detector.hpp"
@@ -397,6 +398,151 @@ void test_track_states() {
           "removed track state is represented explicitly");
 }
 
+[[nodiscard]] std::string valid_runtime_config_text() {
+  return
+      "runtime:\n"
+      "  max_frames: 7\n"
+      "detection:\n"
+      "  model_path: ../models/test.onnx\n"
+      "  input_width: 640\n"
+      "  input_height: 640\n"
+      "  strides: [8, 16, 32]\n"
+      "  class_names: [AIRPLANE, BIRD, DRONE, HELICOPTER]\n"
+      "  confidence_threshold: 0.25\n"
+      "  nms_threshold: 0.45\n"
+      "  class_agnostic_nms: true\n"
+      "  intra_op_threads: 2\n"
+      "tracking:\n"
+      "  iou_threshold: 0.2\n"
+      "  min_hits_to_confirm: 3\n"
+      "  max_missed_frames: 5\n"
+      "  default_dt_seconds: 0.033333333\n"
+      "  position_process_noise: 4.0\n"
+      "  size_process_noise: 1.0\n"
+      "  velocity_process_noise: 2500.0\n"
+      "  position_measurement_noise: 2.0\n"
+      "  size_measurement_noise: 2.0\n";
+}
+
+void test_runtime_config() {
+  const auto temp_dir =
+      std::filesystem::temp_directory_path() / "uav_runtime_config_test";
+  std::filesystem::remove_all(temp_dir);
+  std::filesystem::create_directories(temp_dir / "configs");
+  const auto config_path = temp_dir / "configs" / "runtime.yaml";
+  {
+    std::ofstream config_file{config_path};
+    config_file << valid_runtime_config_text();
+  }
+
+  const auto config = uav::load_runtime_config(config_path);
+  require(config.max_frames == 7U, "runtime max_frames is parsed");
+  require(config.detector.model_path ==
+              (temp_dir / "models" / "test.onnx").lexically_normal(),
+          "relative model path is resolved from the config directory");
+  require(config.detector.postprocessor.class_names.size() == 4U &&
+              config.detector.postprocessor.class_names[2] == "DRONE",
+          "detector class order is preserved");
+  require(config.detector.postprocessor.strides ==
+              std::vector<std::uint32_t>{8U, 16U, 32U},
+          "detector strides are parsed");
+  require(config.detector.intra_op_threads == 2U,
+          "ONNX thread count is parsed");
+  require(std::abs(config.tracker.iou_threshold - 0.2F) < 0.0001F &&
+              config.tracker.min_hits_to_confirm == 3U &&
+              config.tracker.max_missed_frames == 5U,
+          "tracker configuration is parsed");
+
+  const auto write_invalid = [&](std::string_view name,
+                                 const std::string& contents) {
+    const auto path = temp_dir / (std::string{name} + ".yaml");
+    std::ofstream file{path};
+    file << contents;
+    file.close();
+    return path;
+  };
+
+  const auto unknown = write_invalid(
+      "unknown", valid_runtime_config_text() + "  unexpected: 1\n");
+  require_invalid_argument(
+      [&] { static_cast<void>(uav::load_runtime_config(unknown)); },
+      "unknown key 'tracking.unexpected'");
+
+  auto duplicate_text = valid_runtime_config_text();
+  const auto detection_position = duplicate_text.find("detection:\n");
+  duplicate_text.insert(detection_position + std::string{"detection:\n"}.size(),
+                        "  input_width: 320\n");
+  const auto duplicate = write_invalid("duplicate", duplicate_text);
+  require_invalid_argument(
+      [&] { static_cast<void>(uav::load_runtime_config(duplicate)); },
+      "duplicate key 'detection.input_width'");
+
+  auto missing_text = valid_runtime_config_text();
+  const std::string required_line = "  nms_threshold: 0.45\n";
+  missing_text.erase(missing_text.find(required_line), required_line.size());
+  const auto missing = write_invalid("missing", missing_text);
+  require_invalid_argument(
+      [&] { static_cast<void>(uav::load_runtime_config(missing)); },
+      "missing required key 'detection.nms_threshold'");
+
+  auto invalid_bool_text = valid_runtime_config_text();
+  const auto bool_position = invalid_bool_text.find("class_agnostic_nms: true");
+  invalid_bool_text.replace(bool_position,
+                            std::string{"class_agnostic_nms: true"}.size(),
+                            "class_agnostic_nms: yes");
+  const auto invalid_bool = write_invalid("invalid_bool", invalid_bool_text);
+  require_invalid_argument(
+      [&] { static_cast<void>(uav::load_runtime_config(invalid_bool)); },
+      "must be true or false");
+
+  auto invalid_list_text = valid_runtime_config_text();
+  const auto list_position = invalid_list_text.find("strides: [8, 16, 32]");
+  invalid_list_text.replace(list_position,
+                            std::string{"strides: [8, 16, 32]"}.size(),
+                            "strides: 8, 16, 32");
+  const auto invalid_list = write_invalid("invalid_list", invalid_list_text);
+  require_invalid_argument(
+      [&] { static_cast<void>(uav::load_runtime_config(invalid_list)); },
+      "must use [value, value] syntax");
+
+  auto invalid_threads_text = valid_runtime_config_text();
+  const auto threads_position =
+      invalid_threads_text.find("intra_op_threads: 2");
+  invalid_threads_text.replace(
+      threads_position, std::string{"intra_op_threads: 2"}.size(),
+      "intra_op_threads: 0");
+  const auto invalid_threads =
+      write_invalid("invalid_threads", invalid_threads_text);
+  require_invalid_argument(
+      [&] { static_cast<void>(uav::load_runtime_config(invalid_threads)); },
+      "detection.intra_op_threads must be >= 1");
+
+  auto invalid_range_text = valid_runtime_config_text();
+  const auto range_position = invalid_range_text.find("iou_threshold: 0.2");
+  invalid_range_text.replace(range_position,
+                             std::string{"iou_threshold: 0.2"}.size(),
+                             "iou_threshold: 1.5");
+  const auto invalid_range =
+      write_invalid("invalid_range", invalid_range_text);
+  require_invalid_argument(
+      [&] { static_cast<void>(uav::load_runtime_config(invalid_range)); },
+      "tracking.iou_threshold must be in [0, 1]");
+
+  const auto malformed = write_invalid("malformed", "runtime:\n   max_frames: 0\n");
+  require_invalid_argument(
+      [&] { static_cast<void>(uav::load_runtime_config(malformed)); },
+      "only two-level keys");
+
+  require_invalid_argument(
+      [&] {
+        static_cast<void>(uav::load_runtime_config(
+            temp_dir / "missing_runtime_config.yaml"));
+      },
+      "runtime config file not found");
+
+  std::filesystem::remove_all(temp_dir);
+}
+
 void test_cli_options() {
   const std::array valid{
       std::string_view{"--config"},
@@ -408,6 +554,19 @@ void test_cli_options() {
   require(options.config_path == "configs/example.yaml",
           "configuration path is parsed");
   require(options.input_source == "camera0", "input source is parsed");
+
+  const std::array video_with_output{
+      std::string_view{"--config"},
+      std::string_view{"configs/example.yaml"},
+      std::string_view{"--input"},
+      std::string_view{"video.mp4"},
+      std::string_view{"--output-tracks"},
+      std::string_view{"outputs/tracks.txt"},
+  };
+  const auto video_options = uav::parse_cli(video_with_output);
+  require(video_options.action == uav::CliAction::run &&
+              video_options.output_tracks_path == "outputs/tracks.txt",
+          "video inference accepts optional MOT track output");
 
   const std::array replay{
       std::string_view{"--replay-mot"},
@@ -437,13 +596,15 @@ void test_cli_options() {
   require_invalid_argument(
       [&] { static_cast<void>(uav::parse_cli(missing_input)); },
       "missing required option: --input");
-  const std::array output_without_replay{
-      std::string_view{"--output-tracks"},
-      std::string_view{"results/tracks.txt"},
+  const std::array mixed_modes{
+      std::string_view{"--replay-mot"},
+      std::string_view{"data/processed/mot/V_DRONE_001"},
+      std::string_view{"--input"},
+      std::string_view{"video.mp4"},
   };
   require_invalid_argument(
-      [&] { static_cast<void>(uav::parse_cli(output_without_replay)); },
-      "requires --replay-mot");
+      [&] { static_cast<void>(uav::parse_cli(mixed_modes)); },
+      "cannot be combined");
 }
 
 void test_timestamp_order() {
@@ -746,6 +907,7 @@ int main() {
       std::pair{"ONNX detector build contract",
                 test_onnx_detector_build_contract},
       std::pair{"track states", test_track_states},
+      std::pair{"runtime config", test_runtime_config},
       std::pair{"CLI options", test_cli_options},
       std::pair{"timestamp order", test_timestamp_order},
       std::pair{"pipeline summary", test_pipeline_summary},

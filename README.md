@@ -24,8 +24,10 @@
 
 - 초기 프로젝트 구조 및 기본 개발 환경 세팅 완료
 - GitHub Issue 및 Pull Request 기반 개발 프로세스 도입
-- 다음 작업 단계: 데이터셋 구조 분석 및 라벨 검증
-- 모델 학습과 실제 추론 엔진 구현은 후속 단계에서 진행
+- DroneDetectionThesis RGB 데이터 분석·변환·분할과 Kalman+IoU 추적 평가 경로 구현
+- YOLOX-s 4클래스 Windows 학습/export 도구와 ONNX Runtime CPU reference detector 구현
+- OpenCV 영상 → ONNX detector → tracker의 strict config 기반 C++ CLI 연결
+- CUDA 전체 학습, 정확도 평가, 화면 시각화와 Jetson/TensorRT 장치 검증은 후속 단계
 
 기존 초기 세팅 작업을 불필요하게 반복하지 않는다.
 
@@ -840,7 +842,7 @@ Issue를 완료했다고 판단하려면 다음 조건을 확인한다.
 
 1. CUDA GPU가 있는 Windows 호스트에서 YOLOX-s 전체 학습
 2. test split의 AP, 클래스별 Recall 및 작은 객체 Recall 기록
-3. CLI/config factory에서 OpenCV source + `OnnxYoloXDetector` + tracker 연결
+3. ~~CLI/config factory에서 OpenCV source + `OnnxYoloXDetector` + tracker 연결~~
 4. 학습 model의 detector 결과로 end-to-end 평가
 5. 실제 측정 후 1280 full-frame과 overlap tiling 비교 여부 결정
 6. Jetson 스택 승인 후 TensorRT C++ adapter와 장치 검증

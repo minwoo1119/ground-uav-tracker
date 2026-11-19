@@ -27,6 +27,7 @@ include(CompilerWarnings)
 add_library(uav_core
   src/core/cli.cpp
   src/core/pipeline.cpp
+  src/core/runtime_config.cpp
   src/core/types.cpp
   src/detection/mot_replay_detector.cpp
   src/detection/onnx_yolox_detector.cpp
@@ -151,6 +152,20 @@ if(UAV_BUILD_TESTS)
           message(FATAL_ERROR "UAV_TEST_VIDEO does not exist: ${UAV_TEST_VIDEO}")
         endif()
         list(APPEND UAV_ONNX_TEST_ARGUMENTS "${UAV_TEST_VIDEO}")
+
+        file(TO_CMAKE_PATH "${UAV_TEST_ONNX_MODEL}"
+          UAV_TEST_ONNX_MODEL_CONFIG)
+        set(UAV_CLI_TEST_CONFIG
+          "${CMAKE_CURRENT_BINARY_DIR}/onnx-smoke.yaml")
+        configure_file(
+          "${CMAKE_CURRENT_SOURCE_DIR}/cmake/onnx-smoke.yaml.in"
+          "${UAV_CLI_TEST_CONFIG}"
+          @ONLY
+        )
+        add_test(NAME uav_cli_video
+          COMMAND uav-tracker
+                  --config "${UAV_CLI_TEST_CONFIG}"
+                  --input "${UAV_TEST_VIDEO}")
       endif()
       add_test(NAME uav_onnx_tests
         COMMAND uav_onnx_tests ${UAV_ONNX_TEST_ARGUMENTS})

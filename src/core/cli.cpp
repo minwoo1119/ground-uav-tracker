@@ -67,12 +67,11 @@ CliOptions parse_cli(std::span<const std::string_view> arguments) {
   }
 
   if (options.action == CliAction::replay_mot) {
+    if (options.config_path.has_value() || options.input_source.has_value()) {
+      throw std::invalid_argument(
+          "--replay-mot cannot be combined with --config or --input");
+    }
     return options;
-  }
-
-  if (options.output_tracks_path.has_value()) {
-    throw std::invalid_argument(
-        "--output-tracks requires --replay-mot <mot-sequence-dir>");
   }
 
   if (!options.config_path.has_value()) {
@@ -92,15 +91,15 @@ std::string cli_usage() {
       "  uav-tracker self-check\n"
       "  uav-tracker --replay-mot <mot-sequence-dir> "
       "[--output-tracks <path>]\n"
-      "  uav-tracker --config <path> --input <source>\n"
+      "  uav-tracker --config <path> --input <video> "
+      "[--output-tracks <path>]\n"
       "\n"
       "Options:\n"
       "  --replay-mot <dir>  Replay a MOT Challenge sequence directory "
       "(seqinfo.ini + gt/gt.txt) through KalmanIoUTracker\n"
-      "  --output-tracks <path>  Write replayed tracks as MOTChallenge "
-      "result rows (requires --replay-mot)\n"
-      "  --config <path>     Configuration file path\n"
-      "  --input <source>    Video file, device, or stream source\n";
+      "  --output-tracks <path>  Write tracks as MOTChallenge result rows\n"
+      "  --config <path>     Strict runtime configuration file path\n"
+      "  --input <video>     Video file path (camera and stream unsupported)\n";
 }
 
 }  // namespace uav

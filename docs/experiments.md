@@ -84,3 +84,13 @@
 - 결과: 두 입력 모두 confidence 0.99에서 detection 0개
 - 해석 제한: 미학습 smoke model의 0 detection은 정확도 결과가 아니며, 경로와 shape 검증만 의미함
 - 미검증: 학습 checkpoint AP/Recall, CPU latency/FPS, CUDA/TensorRT/Jetson
+
+## 2026-11-17 실제 영상 CLI 구조 검증
+
+- 목적: runtime config → OpenCV 영상 → ONNX Runtime detector → Kalman+IoU tracker → 선택적 MOT writer 연결 검증
+- 환경: Windows, MSVC Release, ONNX Runtime CPU 1.23.2, OpenCV 4.11.0
+- 입력: local 미학습 smoke ONNX와 `V_DRONE_001.mp4` 첫 frame(`max_frames: 1`)
+- 결과: frame 1개 처리, detection 0개, track 0개, 빈 MOT 결과 파일 생성
+- 자동 검증: ONNX/OpenCV 활성 CTest에서 core unit, CLI video, detector integration 3개 통과
+- 해석 제한: 0 detection은 미학습 model 결과이며 정확도 실패/성공을 의미하지 않음. 단일 frame 처리 시간은 FPS 또는 latency 기준으로 기록하지 않음
+- 미검증: 학습 checkpoint end-to-end 결과, 전체 영상 평가, 화면 시각화, camera/RTSP, TensorRT/Jetson

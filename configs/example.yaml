@@ -1,15 +1,26 @@
-# Schema is illustrative and is not loaded by the current executable.
-project:
-  name: ground-uav-tracker
-
-input:
-  source: TBD
+# Strict project runtime schema; this is not a general YAML document.
+# Relative model paths are resolved from this configuration file directory.
+runtime:
+  max_frames: 0
 
 detection:
-  implementation: TBD
+  model_path: ../models/yolox_s_uav.onnx
+  input_width: 640
+  input_height: 640
+  strides: [8, 16, 32]
+  class_names: [AIRPLANE, BIRD, DRONE, HELICOPTER]
+  confidence_threshold: 0.25
+  nms_threshold: 0.45
+  class_agnostic_nms: true
+  intra_op_threads: 1
 
 tracking:
-  implementation: TBD
-
-tensorrt:
-  enabled: false
+  iou_threshold: 0.20
+  min_hits_to_confirm: 3
+  max_missed_frames: 5
+  default_dt_seconds: 0.033333333
+  position_process_noise: 4.0
+  size_process_noise: 1.0
+  velocity_process_noise: 2500.0
+  position_measurement_noise: 2.0
+  size_measurement_noise: 2.0
