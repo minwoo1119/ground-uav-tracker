@@ -2,7 +2,7 @@
 
 ## 현재 확정된 경계 및 구현체
 
-입력, 탐지, 추적 및 관측 기록은 교체 가능한 포트(`IFrameSource`, `IDetector`, `ITracker`, `ITrackSink`, `IMetricsSink`)로 분리되어 있으며, 현재 구현된 구체 어댑터는 다음과 같습니다.
+입력, 탐지, 추적 및 관측 기록은 교체 가능한 포트(`IFrameSource`, `IDetector`, `ITracker`, `ITrackSink`, `IMetricsSink`, `IFrameObserver`)로 분리되어 있으며, 현재 구현된 구체 어댑터는 다음과 같습니다.
 
 ```text
 IFrameSource ---------------------------------> Frame -> IDetector -----------------------> Detection[]
@@ -13,13 +13,13 @@ IFrameSource ---------------------------------> Frame -> IDetector -------------
                                                                                     ITracker -> Track[]
                                                                                       └─ KalmanIoUTracker
                                                                                            |
-                                                                                 +---------+---------+
-                                                                                 v                   v
-                                                                            ITrackSink         IMetricsSink
-                                                                              └─ MotTrackWriter
+                                                                      +--------------------+--------------------+
+                                                                      v                    v                    v
+                                                                 ITrackSink          IMetricsSink        IFrameObserver
+                                                                   └─ MotTrackWriter                       └─ OpenCvVideoVisualizer (선택)
 ```
 
-`TrackingPipeline`은 프레임 순서 검증(단조 증가 timestamp 보장), `detect` → `update` → 선택적 track sink → metrics sink 호출 순서 및 처리 개수/시간 집계를 담당합니다. `ITrackSink`를 전달하지 않으면 기존과 같이 추적 결과 파일을 생성하지 않습니다.
+`TrackingPipeline`은 프레임 순서 검증(단조 증가 timestamp 보장), `detect` → `update` → 선택적 track sink → metrics sink → 선택적 frame observer 호출 순서 및 처리 개수/시간 집계를 담당합니다. `ITrackSink`와 `IFrameObserver`를 전달하지 않으면 추적 결과 파일이나 오버레이 영상을 생성하지 않습니다.
 
 선택적 ONNX Runtime CPU reference adapter와 export된 YOLOX raw tensor 이후 경계가 구현되어 있습니다.
 
@@ -35,6 +35,7 @@ OnnxYoloXDetector -> ONNX Runtime CPU -> raw float[8400][9]
 - `Track`: `TrackId`, `BoundingBox`, `age_frames`, `missed_frames`와 `tentative`, `confirmed`, `lost`, `removed` 상태를 가집니다.
 - `ITrackSink`: 처리 중인 `Frame`과 그 프레임에서 반환된 `Track[]`을 함께 받아 frame ID와 timestamp의 연관을 유지합니다.
 - `FrameMetrics`: `frame_id`, `captured_at`, `detection_count`, `track_count` 및 프레임 처리 시간(`processing_time`)을 전달합니다.
+- `IFrameObserver`: `Frame`, `Detection[]`, `Track[]`, `FrameMetrics`를 함께 전달받아 오버레이 렌더링이나 관측 확장에 사용합니다.
 
 ## 핵심 모듈 구현
 
@@ -73,14 +74,19 @@ OnnxYoloXDetector -> ONNX Runtime CPU -> raw float[8400][9]
 - `OnnxYoloXDetector`: CMake `UAV_ENABLE_ONNXRUNTIME=ON`일 때 CPU session을 만들고 static `[1,3,640,640]` input과 `[1,8400,9]` float output을 검증한 뒤 `YoloXPostprocessor`에 전달합니다.
 - `UAV_ENABLE_ONNXRUNTIME=OFF`가 기본값이므로 외부 runtime 없이 기존 build와 MOT 테스트가 유지됩니다. package 연결과 실제 smoke test 절차는 [ONNX Runtime detector 문서](onnx-runtime-detector.md)에 기록합니다.
 
+### 6. 오버레이 시각화 및 영상 저장
+
+- 순수 C++ 보조 계층(`include/uav/visualization/overlay.hpp`): 경계 상자 클램핑, 검출·추적·HUD 라벨 포맷, 상태별 색상, 확장자별 코덱 선택(`.avi`/`MJPG`, `.mp4`/`mp4v`)과 덮어쓰기/충돌 방지 경로 검증을 제공합니다.
+- `OpenCvVideoVisualizer`: `UAV_HAS_OPENCV=1`일 때 입력 `Frame`의 BGR8 복사본에 검출 박스, 활성 트랙(`removed` 제외), 측정 HUD를 렌더링하고 `cv::VideoWriter`로 저장합니다. `UAV_HAS_OPENCV=0`일 때는 명시적 오류를 반환합니다. 자세한 계약은 [시각화 문서](visualization.md)에 기록합니다.
+
 ## 실행 계층 (`apps/uav_tracker_main.cpp`)
 
 - `uav-tracker self-check`: 빈 어댑터로 파이프라인 무결성 자가 진단
 - `uav-tracker --replay-mot <mot-sequence-dir>`: `MotSequenceFrameSource` + `MotReplayDetector` + `KalmanIoUTracker`를 연결하여 실제 변환된 시퀀스를 End-to-End 리플레이하고 처리 프레임/검출/트랙 수 및 소요 시간을 출력
 - `uav-tracker --replay-mot <mot-sequence-dir> --output-tracks <path>`: 동일한 리플레이 결과를 지정한 MOTChallenge 텍스트 파일에도 기록. 옵션이 없으면 파일을 생성하지 않음
-- `uav-tracker --config <path> --input <video> [--output-tracks <path>]`: strict runtime config를 읽고 `OpenCvFrameSource` → `OnnxYoloXDetector` → `KalmanIoUTracker` → 선택적 `MotTrackWriter`를 조립합니다. 설정 계약과 실행법은 [runtime config 문서](runtime-config.md)에 기록합니다.
-- `runtime.max_frames=0`이면 영상 끝까지 처리하고 양수이면 구조 검증이나 제한 실행을 위해 해당 프레임 수에서 중단합니다. frame ID와 timestamp는 source에서 pipeline, tracker, sink까지 유지됩니다.
+- `uav-tracker --config <path> --input <video> [--output-tracks <path>] [--output-video <path>]`: strict runtime config를 읽고 `OpenCvFrameSource` → `OnnxYoloXDetector` → `KalmanIoUTracker` → 선택적 `MotTrackWriter` 및 선택적 `OpenCvVideoVisualizer`를 조립합니다. 설정 계약과 실행법은 [runtime config 문서](runtime-config.md)와 [시각화 문서](visualization.md)에 기록합니다.
+- `runtime.max_frames=0`이면 영상 끝까지 처리하고 양수이면 구조 검증이나 제한 실행을 위해 해당 프레임 수에서 중단합니다. frame ID와 timestamp는 source에서 pipeline, tracker, sink, observer까지 유지됩니다.
 
 ## 아직 확정하지 않은 설계
 
-결과 시각화, 자동 보존/정리 정책, 추론 주기, 멀티스레딩/큐, ROI/tiling, camera/RTSP 입력, GPU/zero-copy pixel 형식과 TensorRT adapter는 후속 단계에서 결정합니다.
+실시간 GUI 창 표시(`cv::imshow`), 자동 보존/정리 정책, 추론 주기, 멀티스레딩/큐, ROI/tiling, camera/RTSP 입력, GPU/zero-copy pixel 형식과 TensorRT adapter는 후속 단계에서 결정합니다.

@@ -37,6 +37,8 @@ add_library(uav_core
   src/tracking/kalman_iou_tracker.cpp
   src/video/mot_sequence_source.cpp
   src/video/opencv_frame_source.cpp
+  src/visualization/opencv_video_visualizer.cpp
+  src/visualization/overlay.cpp
 )
 add_library(uav::core ALIAS uav_core)
 target_compile_features(uav_core PUBLIC cxx_std_20)
@@ -93,9 +95,9 @@ else()
 endif()
 
 if(UAV_ENABLE_OPENCV)
-  find_package(OpenCV QUIET COMPONENTS core videoio)
+  find_package(OpenCV QUIET COMPONENTS core imgproc videoio)
   if(OpenCV_FOUND)
-    message(STATUS "OpenCV found (${OpenCV_VERSION}); enabling OpenCvFrameSource")
+    message(STATUS "OpenCV found (${OpenCV_VERSION}); enabling OpenCvFrameSource and OpenCvVideoVisualizer")
     target_compile_definitions(uav_core PUBLIC UAV_HAS_OPENCV=1)
     target_link_libraries(uav_core PUBLIC ${OpenCV_LIBS})
     target_include_directories(uav_core PUBLIC ${OpenCV_INCLUDE_DIRS})

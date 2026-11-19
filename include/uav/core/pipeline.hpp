@@ -1,6 +1,7 @@
 #pragma once
 
 #include "uav/detection/detector.hpp"
+#include "uav/telemetry/frame_observer.hpp"
 #include "uav/telemetry/metrics_sink.hpp"
 #include "uav/telemetry/track_sink.hpp"
 #include "uav/tracking/tracker.hpp"
@@ -28,7 +29,8 @@ class TrackingPipeline {
                    IDetector& detector,
                    ITracker& tracker,
                    IMetricsSink& metrics_sink,
-                   ITrackSink* track_sink = nullptr) noexcept;
+                   ITrackSink* track_sink = nullptr,
+                   IFrameObserver* observer = nullptr) noexcept;
   [[nodiscard]] RunSummary run(const RunOptions& options = {});
 
  private:
@@ -37,6 +39,7 @@ class TrackingPipeline {
   ITracker& tracker_;
   IMetricsSink& metrics_sink_;
   ITrackSink* track_sink_{};
+  IFrameObserver* observer_{};
   std::optional<Timestamp> last_timestamp_{};
 };
 

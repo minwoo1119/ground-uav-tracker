@@ -11,12 +11,13 @@ $env:PATH="C:\path\to\opencv\build\x64\vc16\bin;$env:PATH"
 build-onnx\Release\uav-tracker.exe `
   --config configs\local-runtime.yaml `
   --input data\raw\sample.mp4 `
-  --output-tracks outputs\sample-tracks.txt
+  --output-tracks outputs\sample-tracks.txt `
+  --output-video outputs\sample-overlay.avi
 ```
 
-`--output-tracks`는 선택 사항입니다. 지정하면 기존 파일을 덮어쓰지 않고 MOTChallenge 형식의 활성 track 행을 기록합니다. 부모 디렉터리는 미리 만들어야 합니다.
+`--output-tracks`와 `--output-video`는 모두 선택 사항입니다. 지정하면 기존 파일을 덮어쓰지 않고 각각 MOTChallenge 형식의 활성 track 행과 검출·추적 오버레이 영상(`.avi`/`.mp4`)을 기록합니다. 부모 디렉터리는 미리 만들어야 합니다. 시각화 세부 규칙은 [시각화 문서](visualization.md)를 참고합니다.
 
-종료 요약의 `total_processing_us`는 detector와 tracker 처리 시간의 합이며 영상 decode, 파일 출력과 화면 표시는 포함하지 않습니다. 따라서 이 값 하나를 FPS나 end-to-end latency 기준으로 해석하지 않습니다.
+종료 요약의 `total_processing_us`는 detector와 tracker 처리 시간의 합이며 영상 decode, 파일 출력, 오버레이 렌더링과 영상 인코딩은 포함하지 않습니다. 따라서 이 값 하나를 FPS나 end-to-end latency 기준으로 해석하지 않습니다.
 
 ## 허용 설정 문법
 

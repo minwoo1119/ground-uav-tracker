@@ -19,6 +19,8 @@ class OpenCvFrameSource final : public IFrameSource {
   OpenCvFrameSource& operator=(OpenCvFrameSource&&) noexcept;
 
   [[nodiscard]] std::optional<Frame> next() override;
+  [[nodiscard]] double fps() const noexcept;
+  [[nodiscard]] ImageSize image_size() const noexcept;
   [[nodiscard]] static bool is_compiled_with_opencv() noexcept;
 
  private:

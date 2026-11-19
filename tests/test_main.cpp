@@ -6,11 +6,14 @@
 #include "uav/detection/onnx_yolox_detector.hpp"
 #include "uav/detection/yolox_preprocessor.hpp"
 #include "uav/detection/yolox_postprocessor.hpp"
+#include "uav/telemetry/frame_observer.hpp"
 #include "uav/telemetry/mot_track_writer.hpp"
 #include "uav/telemetry/track_sink.hpp"
 #include "uav/tracking/kalman_iou_tracker.hpp"
 #include "uav/video/mot_sequence_source.hpp"
 #include "uav/video/opencv_frame_source.hpp"
+#include "uav/visualization/opencv_video_visualizer.hpp"
+#include "uav/visualization/overlay.hpp"
 
 #include <algorithm>
 #include <array>
@@ -605,6 +608,41 @@ void test_cli_options() {
   require_invalid_argument(
       [&] { static_cast<void>(uav::parse_cli(mixed_modes)); },
       "cannot be combined");
+
+  const std::array video_run_args{
+      std::string_view{"--config"},
+      std::string_view{"configs/example.yaml"},
+      std::string_view{"--input"},
+      std::string_view{"video.mp4"},
+      std::string_view{"--output-tracks"},
+      std::string_view{"out/tracks.txt"},
+      std::string_view{"--output-video"},
+      std::string_view{"out/overlay.avi"},
+  };
+  const auto video_run = uav::parse_cli(video_run_args);
+  require(video_run.action == uav::CliAction::run, "video run action parsed");
+  require(video_run.output_video_path == "out/overlay.avi",
+          "output_video_path is parsed");
+
+  const std::array duplicate_video{
+      std::string_view{"--config"},       std::string_view{"a.yaml"},
+      std::string_view{"--input"},        std::string_view{"in.mp4"},
+      std::string_view{"--output-video"}, std::string_view{"a.avi"},
+      std::string_view{"--output-video"}, std::string_view{"b.avi"},
+  };
+  require_invalid_argument(
+      [&] { static_cast<void>(uav::parse_cli(duplicate_video)); },
+      "may only be specified once");
+
+  const std::array replay_with_video{
+      std::string_view{"--replay-mot"},
+      std::string_view{"data/processed/mot/V_DRONE_001"},
+      std::string_view{"--output-video"},
+      std::string_view{"out/overlay.avi"},
+  };
+  require_invalid_argument(
+      [&] { static_cast<void>(uav::parse_cli(replay_with_video)); },
+      "cannot be combined");
 }
 
 void test_timestamp_order() {
@@ -892,6 +930,361 @@ void test_opencv_frame_source_missing_file() {
       "video file not found");
 }
 
+class RecordingFrameObserver final : public uav::IFrameObserver {
+ public:
+  void on_frame(const uav::Frame& frame,
+                std::span<const uav::Detection> detections,
+                std::span<const uav::Track> tracks,
+                const uav::FrameMetrics& metrics) override {
+    frame_ids.push_back(frame.id);
+    timestamps.push_back(frame.captured_at);
+    detection_counts.push_back(detections.size());
+    track_counts.push_back(tracks.size());
+    metric_frame_ids.push_back(metrics.frame_id);
+  }
+
+  std::vector<uav::FrameId> frame_ids{};
+  std::vector<uav::Timestamp> timestamps{};
+  std::vector<std::size_t> detection_counts{};
+  std::vector<std::size_t> track_counts{};
+  std::vector<uav::FrameId> metric_frame_ids{};
+};
+
+void test_pipeline_frame_observer() {
+  TimestampSource source{{uav::Timestamp{100}, uav::Timestamp{200}}};
+  EmptyDetector detector;
+  EmptyTracker tracker;
+  RecordingMetricsSink metrics_sink;
+  RecordingTrackSink track_sink;
+  RecordingFrameObserver observer;
+  uav::TrackingPipeline pipeline{
+      source, detector, tracker, metrics_sink, &track_sink, &observer};
+  const auto summary = pipeline.run();
+  require(summary.frames_processed == 2U, "observer run processes 2 frames");
+  require(observer.frame_ids == std::vector<uav::FrameId>{1, 2},
+          "observer receives frame IDs in order");
+  require(observer.timestamps ==
+              std::vector<uav::Timestamp>{uav::Timestamp{100},
+                                          uav::Timestamp{200}},
+          "observer preserves frame timestamps");
+  require(observer.metric_frame_ids == std::vector<uav::FrameId>{1, 2},
+          "observer receives matching FrameMetrics");
+  require(observer.detection_counts == std::vector<std::size_t>{0, 0} &&
+              observer.track_counts == std::vector<std::size_t>{0, 0},
+          "observer receives detection and track spans");
+}
+
+void test_overlay_formatting_and_path_validation() {
+  const uav::ImageSize size{.width = 100U, .height = 80U};
+  const auto inside = uav::clamp_bounding_box(
+      {.x = 10.2F, .y = 20.6F, .width = 15.1F, .height = 10.0F}, size);
+  require(inside.has_value() && inside->x == 10 && inside->y == 20 &&
+              inside->width == 16 && inside->height == 11,
+          "bounding box clamps and rounds to enclosing integer pixels");
+
+  const auto clipped = uav::clamp_bounding_box(
+      {.x = -5.0F, .y = 70.0F, .width = 20.0F, .height = 30.0F}, size);
+  require(clipped.has_value() && clipped->x == 0 && clipped->y == 70 &&
+              clipped->width == 15 && clipped->height == 10,
+          "partially out-of-bounds box is clamped to image bounds");
+
+  require(!uav::clamp_bounding_box(
+               {.x = 120.0F, .y = 10.0F, .width = 10.0F, .height = 10.0F},
+               size)
+               .has_value(),
+          "box outside image returns nullopt");
+  require(!uav::clamp_bounding_box(
+               {.x = std::numeric_limits<float>::quiet_NaN(),
+                .y = 0.0F,
+                .width = 10.0F,
+                .height = 10.0F},
+               size)
+               .has_value(),
+          "non-finite box returns nullopt");
+
+  require(uav::format_detection_label(uav::Detection{
+              .class_id = 2,
+              .confidence = 0.876F,
+              .class_name = "DRONE",
+          }) == "DRONE 0.88",
+          "detection label formats class name and confidence");
+  require(uav::format_detection_label(uav::Detection{
+              .class_id = 1,
+              .confidence = 0.5F,
+              .class_name = "",
+          }) == "class_1 0.50",
+          "empty class name falls back to class_<id>");
+  require(uav::format_track_label(uav::Track{
+              .id = 7, .state = uav::TrackState::confirmed}) ==
+              "#7 [CONFIRMED]",
+          "track label formats ID and state");
+  require(uav::track_state_color(uav::TrackState::confirmed) !=
+              uav::track_state_color(uav::TrackState::tentative) &&
+              uav::track_state_color(uav::TrackState::confirmed) !=
+                  uav::track_state_color(uav::TrackState::lost),
+          "active track states use distinct colors");
+
+  const std::string hud = uav::format_hud_summary(uav::FrameMetrics{
+      .frame_id = 3U,
+      .captured_at = uav::Timestamp{66'700},
+      .detection_count = 2U,
+      .track_count = 1U,
+      .processing_time = std::chrono::microseconds{12'500},
+  });
+  require(hud == "Frame 3 | t=66.7ms | Det:2 | Trk:1 | Proc:12.5ms",
+          "HUD summary formats measured metrics deterministically");
+
+  require(uav::select_video_fourcc("out/sample.AVI") == "MJPG",
+          "AVI selects MJPG fourcc case-insensitively");
+  require(uav::select_video_fourcc("out/sample.mp4") == "mp4v",
+          "MP4 selects mp4v fourcc");
+  require_invalid_argument(
+      [] { static_cast<void>(uav::select_video_fourcc("out/sample.mkv")); },
+      "unsupported video output extension");
+
+  const auto temp_dir =
+      std::filesystem::temp_directory_path() / "uav_overlay_path_test";
+  std::filesystem::remove_all(temp_dir);
+  std::filesystem::create_directories(temp_dir);
+  const auto existing_input = temp_dir / "input.mp4";
+  {
+    std::ofstream file{existing_input};
+    file << "placeholder";
+  }
+
+  uav::validate_video_output_path(temp_dir / "overlay.avi", existing_input,
+                                  temp_dir / "tracks.txt");
+  require_invalid_argument(
+      [&] {
+        uav::validate_video_output_path(existing_input, existing_input,
+                                        std::nullopt);
+      },
+      "already exists");
+  require_invalid_argument(
+      [&] {
+        uav::validate_video_output_path(temp_dir / "missing" / "overlay.avi",
+                                        existing_input, std::nullopt);
+      },
+      "parent directory does not exist");
+  require_invalid_argument(
+      [&] {
+        uav::validate_video_output_path(temp_dir / "same.avi", existing_input,
+                                        temp_dir / "same.avi");
+      },
+      "must not match --output-tracks");
+
+  std::filesystem::remove_all(temp_dir);
+}
+
+void test_video_visualizer_contract_and_roundtrip() {
+  const uav::Frame metadata_only{
+      .id = 1U,
+      .captured_at = uav::Timestamp{0},
+      .image_size = {.width = 160U, .height = 120U},
+  };
+  const uav::FrameMetrics metrics{
+      .frame_id = 1U,
+      .captured_at = uav::Timestamp{0},
+      .detection_count = 1U,
+      .track_count = 1U,
+      .processing_time = std::chrono::microseconds{4'200},
+  };
+  require_invalid_argument(
+      [&] {
+        static_cast<void>(
+            uav::render_overlay_bgr(metadata_only, {}, {}, metrics));
+      },
+      "BGR8 frame with owned pixels");
+
+  const auto temp_dir =
+      std::filesystem::temp_directory_path() / "uav_video_visualizer_test";
+  std::filesystem::remove_all(temp_dir);
+  std::filesystem::create_directories(temp_dir);
+  const auto avi_path = temp_dir / "rendered.avi";
+
+  require_invalid_argument(
+      [&] {
+        uav::OpenCvVideoVisualizer visualizer{uav::VideoVisualizerConfig{
+            .output_path = avi_path,
+            .frame_size = {.width = 0U, .height = 120U},
+            .fps = 25.0,
+        }};
+      },
+      "positive frame_size");
+  require_invalid_argument(
+      [&] {
+        uav::OpenCvVideoVisualizer visualizer{uav::VideoVisualizerConfig{
+            .output_path = avi_path,
+            .frame_size = {.width = 160U, .height = 120U},
+            .fps = 0.0,
+        }};
+      },
+      "positive finite fps");
+  require_invalid_argument(
+      [&] {
+        uav::OpenCvVideoVisualizer visualizer{uav::VideoVisualizerConfig{
+            .output_path = temp_dir / "bad.mkv",
+            .frame_size = {.width = 160U, .height = 120U},
+            .fps = 25.0,
+        }};
+      },
+      "unsupported video output extension");
+
+  constexpr std::uint32_t width = 160U;
+  constexpr std::uint32_t height = 120U;
+  constexpr std::size_t padded_stride = static_cast<std::size_t>(width) * 3U + 12U;
+  uav::Frame padded_frame{
+      .id = 1U,
+      .captured_at = uav::Timestamp{0},
+      .image_size = {.width = width, .height = height},
+      .pixel_format = uav::PixelFormat::bgr8,
+      .row_stride_bytes = padded_stride,
+      .pixel_data = std::vector<std::uint8_t>(padded_stride * height, 0U),
+  };
+
+  const std::array detections{uav::Detection{
+      .class_id = 2,
+      .confidence = 0.91F,
+      .bounds = {.x = 20.0F, .y = 40.0F, .width = 30.0F, .height = 24.0F},
+      .class_name = "DRONE",
+  }};
+  const std::array tracks{
+      uav::Track{
+          .id = 1U,
+          .bounds = {.x = 70.0F, .y = 50.0F, .width = 30.0F, .height = 24.0F},
+          .state = uav::TrackState::confirmed,
+      },
+      uav::Track{
+          .id = 2U,
+          .bounds = {.x = 120.0F, .y = 85.0F, .width = 25.0F, .height = 20.0F},
+          .state = uav::TrackState::removed,
+      },
+  };
+
+  if (!uav::OpenCvVideoVisualizer::is_compiled_with_opencv()) {
+    require_runtime_error(
+        [&] {
+          static_cast<void>(uav::render_overlay_bgr(
+              padded_frame, detections, tracks, metrics));
+        },
+        "UAV_ENABLE_OPENCV=ON");
+    require_runtime_error(
+        [&] {
+          uav::OpenCvVideoVisualizer visualizer{uav::VideoVisualizerConfig{
+              .output_path = avi_path,
+              .frame_size = {.width = width, .height = height},
+              .fps = 25.0,
+          }};
+        },
+        "UAV_ENABLE_OPENCV=ON");
+    std::filesystem::remove_all(temp_dir);
+    return;
+  }
+
+  const auto rendered =
+      uav::render_overlay_bgr(padded_frame, detections, tracks, metrics);
+  require(rendered.is_valid() && rendered.has_pixels() &&
+              rendered.id == padded_frame.id &&
+              rendered.captured_at == padded_frame.captured_at &&
+              rendered.image_size.width == width &&
+              rendered.image_size.height == height,
+          "rendered frame preserves metadata and valid BGR8 pixels");
+  require(std::all_of(padded_frame.pixel_data.begin(),
+                      padded_frame.pixel_data.end(),
+                      [](std::uint8_t value) { return value == 0U; }),
+          "render_overlay_bgr does not mutate the input frame");
+
+  const auto confirmed_color =
+      uav::track_state_color(uav::TrackState::confirmed);
+  const auto confirmed_offset =
+      (50U * rendered.row_stride_bytes) + (70U * 3U);
+  require(rendered.pixel_data[confirmed_offset] == confirmed_color.b &&
+              rendered.pixel_data[confirmed_offset + 1U] == confirmed_color.g &&
+              rendered.pixel_data[confirmed_offset + 2U] == confirmed_color.r,
+          "confirmed track border is drawn with the confirmed state color");
+
+  const auto removed_offset =
+      (85U * rendered.row_stride_bytes) + (120U * 3U);
+  require(rendered.pixel_data[removed_offset] == 0U &&
+              rendered.pixel_data[removed_offset + 1U] == 0U &&
+              rendered.pixel_data[removed_offset + 2U] == 0U,
+          "removed track is not rendered");
+
+  {
+    uav::OpenCvVideoVisualizer visualizer{uav::VideoVisualizerConfig{
+        .output_path = avi_path,
+        .frame_size = {.width = width, .height = height},
+        .fps = 25.0,
+    }};
+    require_invalid_argument(
+        [&] { visualizer.on_frame(metadata_only, {}, {}, metrics); },
+        "BGR8 frame with owned pixels");
+
+    uav::Frame wrong_size{
+        .id = 2U,
+        .captured_at = uav::Timestamp{40'000},
+        .image_size = {.width = 80U, .height = 60U},
+        .pixel_format = uav::PixelFormat::bgr8,
+        .row_stride_bytes = 80U * 3U,
+        .pixel_data = std::vector<std::uint8_t>(80U * 3U * 60U, 0U),
+    };
+    require_invalid_argument(
+        [&] { visualizer.on_frame(wrong_size, {}, {}, metrics); },
+        "frame dimensions do not match");
+
+    for (uav::FrameId id = 1U; id <= 3U; ++id) {
+      padded_frame.id = id;
+      padded_frame.captured_at =
+          uav::Timestamp{static_cast<std::int64_t>((id - 1U) * 40'000)};
+      uav::FrameMetrics frame_metrics = metrics;
+      frame_metrics.frame_id = id;
+      frame_metrics.captured_at = padded_frame.captured_at;
+      visualizer.on_frame(padded_frame, detections, tracks, frame_metrics);
+    }
+    require(visualizer.frames_written() == 3U,
+            "visualizer counts written frames");
+    visualizer.close();
+    require_runtime_error(
+        [&] { visualizer.on_frame(padded_frame, detections, tracks, metrics); },
+        "closed");
+  }
+
+  require_invalid_argument(
+      [&] {
+        uav::OpenCvVideoVisualizer duplicate{uav::VideoVisualizerConfig{
+            .output_path = avi_path,
+            .frame_size = {.width = width, .height = height},
+            .fps = 25.0,
+        }};
+      },
+      "already exists");
+
+  {
+    uav::OpenCvFrameSource reader{avi_path};
+    require(reader.image_size().width == width &&
+                reader.image_size().height == height,
+            "written video preserves frame dimensions");
+    require(std::abs(reader.fps() - 25.0) < 0.01,
+            "written video preserves fps");
+    std::size_t read_frames = 0U;
+    bool observed_nonzero_pixel = false;
+    while (auto decoded = reader.next()) {
+      require(decoded->is_valid() && decoded->has_pixels(),
+              "decoded output video frame is valid BGR8");
+      if (std::any_of(decoded->pixel_data.begin(), decoded->pixel_data.end(),
+                      [](std::uint8_t value) { return value > 10U; })) {
+        observed_nonzero_pixel = true;
+      }
+      ++read_frames;
+    }
+    require(read_frames == 3U, "all 3 written video frames are readable");
+    require(observed_nonzero_pixel,
+            "decoded output video contains rendered overlay pixels");
+  }
+
+  std::filesystem::remove_all(temp_dir);
+}
+
 }  // namespace
 
 int main() {
@@ -919,6 +1312,11 @@ int main() {
       std::pair{"MOT replay end-to-end", test_mot_replay_end_to_end},
       std::pair{"OpenCvFrameSource error handling",
                 test_opencv_frame_source_missing_file},
+      std::pair{"pipeline frame observer", test_pipeline_frame_observer},
+      std::pair{"overlay formatting and path validation",
+                test_overlay_formatting_and_path_validation},
+      std::pair{"video visualizer contract and roundtrip",
+                test_video_visualizer_contract_and_roundtrip},
   };
 
   std::size_t failures = 0;

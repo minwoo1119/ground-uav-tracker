@@ -27,7 +27,8 @@
 - DroneDetectionThesis RGB 데이터 분석·변환·분할과 Kalman+IoU 추적 평가 경로 구현
 - YOLOX-s 4클래스 Windows 학습/export 도구와 ONNX Runtime CPU reference detector 구현
 - OpenCV 영상 → ONNX detector → tracker의 strict config 기반 C++ CLI 연결
-- CUDA 전체 학습, 정확도 평가, 화면 시각화와 Jetson/TensorRT 장치 검증은 후속 단계
+- 검출·추적 결과 오버레이 렌더링 및 영상 파일 저장(`--output-video`) 구현
+- CUDA 전체 학습, 정확도 평가, 실시간 GUI 화면 표시와 Jetson/TensorRT 장치 검증은 후속 단계
 
 기존 초기 세팅 작업을 불필요하게 반복하지 않는다.
 

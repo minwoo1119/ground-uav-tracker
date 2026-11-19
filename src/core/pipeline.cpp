@@ -9,12 +9,14 @@ TrackingPipeline::TrackingPipeline(IFrameSource& source,
                                    IDetector& detector,
                                    ITracker& tracker,
                                    IMetricsSink& metrics_sink,
-                                   ITrackSink* track_sink) noexcept
+                                   ITrackSink* track_sink,
+                                   IFrameObserver* observer) noexcept
     : source_(source),
       detector_(detector),
       tracker_(tracker),
       metrics_sink_(metrics_sink),
-      track_sink_(track_sink) {}
+      track_sink_(track_sink),
+      observer_(observer) {}
 
 RunSummary TrackingPipeline::run(const RunOptions& options) {
   RunSummary summary{};
@@ -43,16 +45,20 @@ RunSummary TrackingPipeline::run(const RunOptions& options) {
     summary.tracks_produced += tracks.size();
     ++summary.frames_processed;
     last_timestamp_ = frame->captured_at;
-    if (track_sink_ != nullptr) {
-      track_sink_->write(*frame, tracks);
-    }
-    metrics_sink_.write(FrameMetrics{
+    const FrameMetrics metrics{
         .frame_id = frame->id,
         .captured_at = frame->captured_at,
         .detection_count = detections.size(),
         .track_count = tracks.size(),
         .processing_time = elapsed,
-    });
+    };
+    if (track_sink_ != nullptr) {
+      track_sink_->write(*frame, tracks);
+    }
+    metrics_sink_.write(metrics);
+    if (observer_ != nullptr) {
+      observer_->on_frame(*frame, detections, tracks, metrics);
+    }
   }
   return summary;
 }
