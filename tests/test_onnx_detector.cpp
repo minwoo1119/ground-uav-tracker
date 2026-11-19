@@ -1,5 +1,8 @@
+#include "uav/core/pipeline.hpp"
 #include "uav/detection/onnx_yolox_detector.hpp"
+#include "uav/tracking/kalman_iou_tracker.hpp"
 #include "uav/video/opencv_frame_source.hpp"
+#include "uav/visualization/opencv_video_visualizer.hpp"
 
 #include <cstdint>
 #include <filesystem>
@@ -78,6 +81,46 @@ int main(int argc, char* argv[]) {
       const auto video_detections = detector.detect(*video_frame);
       std::cout << "OpenCV -> ONNX detector frame: OK (detections="
                 << video_detections.size() << ")\n";
+
+      const auto temp_dir =
+          std::filesystem::temp_directory_path() / "uav_onnx_visualizer_test";
+      std::filesystem::remove_all(temp_dir);
+      std::filesystem::create_directories(temp_dir);
+      const auto out_video = temp_dir / "smoke_overlay.avi";
+      {
+        uav::OpenCvFrameSource pipeline_source{std::filesystem::path{argv[2]}};
+        uav::KalmanIoUTracker tracker{};
+        class NullMetrics final : public uav::IMetricsSink {
+         public:
+          void write(const uav::FrameMetrics&) override {}
+        } metrics_sink;
+        uav::OpenCvVideoVisualizer visualizer{uav::VideoVisualizerConfig{
+            .output_path = out_video,
+            .frame_size = pipeline_source.image_size(),
+            .fps = pipeline_source.fps(),
+        }};
+        uav::TrackingPipeline pipeline{pipeline_source, detector, tracker,
+                                       metrics_sink, nullptr, &visualizer};
+        const auto summary = pipeline.run(uav::RunOptions{.max_frames = 1U});
+        visualizer.close();
+        if (summary.frames_processed != 1U ||
+            visualizer.frames_written() != 1U) {
+          throw std::runtime_error(
+              "pipeline + video visualizer did not write 1 frame");
+        }
+      }
+      {
+        uav::OpenCvFrameSource verify_reader{out_video};
+        const auto read_back = verify_reader.next();
+        if (!read_back.has_value() ||
+            read_back->image_size.width != source.image_size().width ||
+            read_back->image_size.height != source.image_size().height) {
+          throw std::runtime_error(
+              "generated smoke overlay video could not be read back");
+        }
+      }
+      std::filesystem::remove_all(temp_dir);
+      std::cout << "OpenCV -> ONNX -> Tracker -> Visualizer: OK\n";
     }
     return 0;
   } catch (const std::exception& error) {

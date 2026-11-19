@@ -61,6 +61,12 @@ CliOptions parse_cli(std::span<const std::string_view> arguments) {
             "--output-tracks may only be specified once");
       }
       options.output_tracks_path = require_value(arguments, index, argument);
+    } else if (argument == "--output-video") {
+      if (options.output_video_path.has_value()) {
+        throw std::invalid_argument(
+            "--output-video may only be specified once");
+      }
+      options.output_video_path = require_value(arguments, index, argument);
     } else {
       throw std::invalid_argument("unknown option: " + std::string{argument});
     }
@@ -70,6 +76,11 @@ CliOptions parse_cli(std::span<const std::string_view> arguments) {
     if (options.config_path.has_value() || options.input_source.has_value()) {
       throw std::invalid_argument(
           "--replay-mot cannot be combined with --config or --input");
+    }
+    if (options.output_video_path.has_value()) {
+      throw std::invalid_argument(
+          "--output-video cannot be combined with --replay-mot "
+          "(MOT replay frames have no pixel buffer)");
     }
     return options;
   }
@@ -92,12 +103,13 @@ std::string cli_usage() {
       "  uav-tracker --replay-mot <mot-sequence-dir> "
       "[--output-tracks <path>]\n"
       "  uav-tracker --config <path> --input <video> "
-      "[--output-tracks <path>]\n"
+      "[--output-tracks <path>] [--output-video <path>]\n"
       "\n"
       "Options:\n"
       "  --replay-mot <dir>  Replay a MOT Challenge sequence directory "
       "(seqinfo.ini + gt/gt.txt) through KalmanIoUTracker\n"
       "  --output-tracks <path>  Write tracks as MOTChallenge result rows\n"
+      "  --output-video <path>   Write annotated overlay video (.avi/.mp4)\n"
       "  --config <path>     Strict runtime configuration file path\n"
       "  --input <video>     Video file path (camera and stream unsupported)\n";
 }

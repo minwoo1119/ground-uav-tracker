@@ -7,6 +7,8 @@
 #include "uav/tracking/kalman_iou_tracker.hpp"
 #include "uav/video/mot_sequence_source.hpp"
 #include "uav/video/opencv_frame_source.hpp"
+#include "uav/visualization/opencv_video_visualizer.hpp"
+#include "uav/visualization/overlay.hpp"
 
 #include <array>
 #include <filesystem>
@@ -123,8 +125,13 @@ int run_mot_replay(
 int run_video_inference(
     const std::filesystem::path& config_path,
     const std::filesystem::path& input_path,
-    const std::optional<std::filesystem::path>& output_tracks_path) {
+    const std::optional<std::filesystem::path>& output_tracks_path,
+    const std::optional<std::filesystem::path>& output_video_path) {
   const auto config = uav::load_runtime_config(config_path);
+  if (output_video_path.has_value()) {
+    uav::validate_video_output_path(*output_video_path, input_path,
+                                    output_tracks_path);
+  }
   if (!uav::OpenCvFrameSource::is_compiled_with_opencv()) {
     throw std::runtime_error(
         "video inference requires an OpenCV-enabled build "
@@ -144,6 +151,14 @@ int run_video_inference(
   if (output_tracks_path.has_value()) {
     track_writer.emplace(*output_tracks_path);
   }
+  std::optional<uav::OpenCvVideoVisualizer> video_visualizer;
+  if (output_video_path.has_value()) {
+    video_visualizer.emplace(uav::VideoVisualizerConfig{
+        .output_path = *output_video_path,
+        .frame_size = source.image_size(),
+        .fps = source.fps(),
+    });
+  }
 
   uav::TrackingPipeline pipeline{
       source,
@@ -151,9 +166,13 @@ int run_video_inference(
       tracker,
       metrics_sink,
       track_writer.has_value() ? &track_writer.value() : nullptr,
+      video_visualizer.has_value() ? &video_visualizer.value() : nullptr,
   };
   const auto summary =
       pipeline.run(uav::RunOptions{.max_frames = config.max_frames});
+  if (video_visualizer.has_value()) {
+    video_visualizer->close();
+  }
 
   std::cout << "video-inference: " << input_path.string() << '\n'
             << "  frames_processed:    " << summary.frames_processed << '\n'
@@ -164,6 +183,10 @@ int run_video_inference(
   if (track_writer.has_value()) {
     std::cout << "  tracks_output:       "
               << track_writer->output_path().string() << '\n';
+  }
+  if (video_visualizer.has_value()) {
+    std::cout << "  video_output:        "
+              << video_visualizer->output_path().string() << '\n';
   }
   return 0;
 }
@@ -205,6 +228,10 @@ int main(int argc, char* argv[]) {
         options.output_tracks_path.has_value()
             ? std::optional<std::filesystem::path>{
                   *options.output_tracks_path}
+            : std::nullopt,
+        options.output_video_path.has_value()
+            ? std::optional<std::filesystem::path>{
+                  *options.output_video_path}
             : std::nullopt);
   } catch (const std::invalid_argument& error) {
     std::cerr << "error: " << error.what() << "\n\n" << uav::cli_usage();

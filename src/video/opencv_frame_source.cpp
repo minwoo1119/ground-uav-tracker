@@ -30,10 +30,10 @@ OpenCvFrameSource::OpenCvFrameSource(const std::filesystem::path& video_path)
                              video_path.string());
   }
 
-  const auto w =
-      static_cast<std::uint32_t>(impl_->capture.get(cv::CAP_PROP_FRAME_WIDTH));
-  const auto h =
-      static_cast<std::uint32_t>(impl_->capture.get(cv::CAP_PROP_FRAME_HEIGHT));
+  const double raw_w = impl_->capture.get(cv::CAP_PROP_FRAME_WIDTH);
+  const double raw_h = impl_->capture.get(cv::CAP_PROP_FRAME_HEIGHT);
+  const auto w = raw_w > 0.0 ? static_cast<std::uint32_t>(raw_w) : 0U;
+  const auto h = raw_h > 0.0 ? static_cast<std::uint32_t>(raw_h) : 0U;
   const double raw_fps = impl_->capture.get(cv::CAP_PROP_FPS);
   impl_->fps = raw_fps > 0.0 ? raw_fps : 30.0;
   impl_->image_size = ImageSize{.width = w, .height = h};
@@ -81,6 +81,14 @@ std::optional<Frame> OpenCvFrameSource::next() {
   };
 }
 
+double OpenCvFrameSource::fps() const noexcept {
+  return impl_ ? impl_->fps : 0.0;
+}
+
+ImageSize OpenCvFrameSource::image_size() const noexcept {
+  return impl_ ? impl_->image_size : ImageSize{};
+}
+
 bool OpenCvFrameSource::is_compiled_with_opencv() noexcept { return true; }
 
 #else
@@ -102,6 +110,10 @@ OpenCvFrameSource& OpenCvFrameSource::operator=(OpenCvFrameSource&&) noexcept =
     default;
 
 std::optional<Frame> OpenCvFrameSource::next() { return std::nullopt; }
+
+double OpenCvFrameSource::fps() const noexcept { return 0.0; }
+
+ImageSize OpenCvFrameSource::image_size() const noexcept { return {}; }
 
 bool OpenCvFrameSource::is_compiled_with_opencv() noexcept { return false; }
 
